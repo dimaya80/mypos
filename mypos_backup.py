@@ -45,7 +45,7 @@ def clear_saved_credentials():
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
-API_URL = "https://gsand.xyz/api/api.php"
+API_URL = "http://127.0.0.1/api/api.php"
 PRIMARY_COLOR = "#2B7A78"
 SECONDARY_COLOR = "#3AAFA9"
 ACCENT_COLOR = "#DEF2F1"
