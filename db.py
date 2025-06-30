@@ -6,7 +6,7 @@ def db_connect():
         host="localhost",
         user="root",          # Ubah ikut setup anda
         password="",          # Ubah ikut setup anda
-        database="gsandxyz_mypos"
+        database="mypos"
     )
 
 # ---------- LOGIN ----------
