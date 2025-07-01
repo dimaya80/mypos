@@ -977,6 +977,42 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET[
     ]);
 }
 
+// CLOSE SHIFT
+elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data['action'] == 'close_shift') {
+    if (!isset($data['user_id']) || !isset($data['cash_end'])) {
+        echo json_encode(['status' => 'error', 'message' => 'user_id and cash_end required']);
+        exit;
+    }
+    $user_id = (int)$data['user_id'];
+    $cash_end = (float)$data['cash_end'];
+
+    // Cari shift yang masih aktif (shift_end IS NULL)
+    $sql = "SELECT id, cash_start, cash_end FROM shifts WHERE user_id = ? AND shift_end IS NULL ORDER BY shift_start DESC LIMIT 1";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    if ($shift = $result->fetch_assoc()) {
+        $shift_id = $shift['id'];
+        $cash_start = (float)$shift['cash_start'];
+        $expected_cash = (float)$shift['cash_end'];
+        $difference = $cash_end - $expected_cash;
+        $now = date('Y-m-d H:i:s');
+        $sql_update = "UPDATE shifts SET shift_end = ?, cash_end = ?, expected_cash = ?, cash_difference = ? WHERE id = ?";
+        $stmt2 = $conn->prepare($sql_update);
+        $stmt2->bind_param("sdddi", $now, $cash_end, $expected_cash, $difference, $shift_id);
+        if ($stmt2->execute()) {
+            echo json_encode(['status' => 'success', 'message' => 'Shift closed successfully']);
+        } else {
+            echo json_encode(['status' => 'error', 'message' => 'Failed to close shift: ' . $stmt2->error]);
+        }
+        $stmt2->close();
+    } else {
+        echo json_encode(['status' => 'error', 'message' => 'No active shift found']);
+    }
+    $stmt->close();
+}
+
 // GET STORE INFO
 elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] == 'get_store_info') {
     $sql = "SELECT * FROM store_settings LIMIT 1";
