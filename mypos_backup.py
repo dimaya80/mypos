@@ -450,6 +450,39 @@ def open_cashier_dashboard(user_id):
     btn_inventory = tk.Button(sales_btn_frame, text="Inventory", bg="#FF9900", fg="white", font=("Arial", 11, "bold"), command=lambda: messagebox.showinfo("Info", "Fungsi Inventory belum diimplementasi"))
     btn_inventory.pack(side="left", padx=2)
 
+    # ====== BUTTON TUTUP SHIFT ======
+    def tutup_shift():
+        win = tk.Toplevel(dashboard)
+        win.title("Tutup Shift")
+        win.geometry("350x200")
+        tk.Label(win, text="Anda pasti ingin tutup shift?", font=("Arial", 13, "bold")).pack(pady=10)
+        tk.Label(win, text="Baki Tunai Akhir (RM):").pack()
+        entry_baki = tk.Entry(win, font=("Arial", 15), width=15)
+        entry_baki.pack(pady=7)
+        entry_baki.focus()
+        def submit_tutup():
+            try:
+                baki_akhir = float(entry_baki.get())
+                resp = requests.post(API_URL, json={"action": "close_shift", "user_id": user_id, "cash_end": baki_akhir}, timeout=10)
+                data = resp.json()
+                if data.get("status") == "success":
+                    messagebox.showinfo("Sukses", "Shift berjaya ditutup!", parent=win)
+                    win.destroy()
+                    dashboard.destroy()
+                    show_login_window()
+                else:
+                    raise Exception(data.get("message", "Gagal tutup shift!"))
+            except Exception as e:
+                messagebox.showerror("Error", f"Gagal tutup shift: {e}", parent=win)
+        tk.Button(win, text="Tutup Shift", command=submit_tutup, bg="#32CD32", fg="white", font=("Arial", 12, "bold")).pack(pady=10)
+        tk.Button(win, text="Batal", command=win.destroy).pack()
+        win.transient(dashboard)
+        win.grab_set()
+        win.wait_window()
+
+    btn_tutup_shift = tk.Button(sales_btn_frame, text="Tutup Shift", bg="#FFA500", fg="black", font=("Arial", 11, "bold"), command=tutup_shift)
+    btn_tutup_shift.pack(side="left", padx=2)
+
     low_stock_frame = tk.Frame(notebook)
     notebook.add(low_stock_frame, text="Stok Rendah")
     low_stock_columns = ("No", "Nama Produk", "Stok", "Status")
@@ -458,7 +491,7 @@ def open_cashier_dashboard(user_id):
         tree_low_stock.heading(col, text=col)
         tree_low_stock.column(col, width=120)
     tree_low_stock.pack(fill="both", expand=True, padx=10, pady=10)
-
+    
     right = ctk.CTkFrame(main)
     right.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
     ctk.CTkLabel(right, text="Transaksi", font=("Arial", 20, "bold")).pack(pady=10, fill="x")
