@@ -290,6 +290,163 @@ def show_login_window():
     root.bind('<Return>', lambda e: login())
     root.mainloop()
 
+def complete_transaction():
+    global item_counter, current_customer, current_user_id
+    
+    # 1. Validasi user_id
+    if not current_user_id:
+        messagebox.showerror("Error", "User ID tidak tersedia. Silakan login kembali.")
+        return
+
+    # 2. Kumpulkan item dari keranjang belanja
+    items = []
+    for item in tree_main.get_children():
+        try:
+            values = tree_main.item(item, 'values')
+            product_name = values[1]
+            quantity = int(values[3])
+            
+            # Format harga dengan benar
+            price_str = values[2].replace("RM", "").strip()
+            unit_price = round(float(price_str), 4)
+            total_price = round(unit_price * quantity, 4)
+            
+            items.append({
+                'name': product_name,
+                'price': unit_price,
+                'quantity': quantity,
+                'total': total_price
+            })
+        except (IndexError, ValueError) as e:
+            messagebox.showerror("Error", f"Format item tidak valid: {str(e)}")
+            return
+
+    # 3. Validasi keranjang belanja
+    if not items:
+        messagebox.showwarning("Peringatan", "Tidak ada item dalam keranjang!")
+        return
+
+    # 4. Cek stok untuk semua item
+    for item in items:
+        if not check_stock(item['name'], item['quantity']):
+            messagebox.showwarning("Stok Habis", f"Stok {item['name']} tidak mencukupi!")
+            return
+
+    # 5. Hitung total transaksi
+    try:
+        subtotal = sum(item['total'] for item in items)
+        discount = float(entry_discount.get() or 0)
+        tax = float(entry_tax.get() or 0)
+        total = subtotal - discount + tax
+    except ValueError:
+        messagebox.showerror("Error", "Input diskon atau pajak tidak valid")
+        return
+
+    # 6. Proses pembayaran
+    payment_method_name = payment_var.get()
+    
+    try:
+        amount_paid = float(entry_amount_paid.get() or 0)
+    except ValueError:
+        amount_paid = 0
+
+    # 7. Validasi khusus untuk pembayaran hutang
+    if payment_method_name == "Hutang":
+        if not current_customer or not current_customer.get('name'):
+            messagebox.showwarning("Peringatan", "Data pelanggan wajib diisi untuk pembayaran hutang!")
+            return
+        amount_paid = 0.00
+    elif amount_paid <= 0:
+        messagebox.showwarning("Peringatan", "Harap masukkan jumlah pembayaran")
+        return
+    elif amount_paid < total:
+        messagebox.showwarning("Peringatan", "Jumlah pembayaran kurang dari total")
+        return
+
+    # 8. Siapkan data transaksi
+    try:
+        payment_method_id = [k for k, v in payment_methods.items() if v == payment_method_name][0]
+        
+        transaction_data = {
+            'action': 'save_transaction',
+            'items': items,
+            'total': total,
+            'discount': discount,
+            'tax': tax,
+            'payment_method_id': payment_method_id,
+            'payment_method': payment_method_name,
+            'amount_paid': amount_paid,
+            'customer_info': current_customer if payment_method_name == "Hutang" else None,
+            'user_id': current_user_id
+        }
+
+        # Debugging: Log data transaksi dan user_id
+        print(f"DEBUG: current_user_id: {current_user_id}")
+        print(f"DEBUG: Data transaksi yang dikirim:\n{json.dumps(transaction_data, indent=2)}")
+
+        # 9. Kirim ke API
+        headers = {'Content-Type': 'application/json'}
+        response = requests.post(API_URL, json=transaction_data, headers=headers, timeout=10)
+        
+        # Debugging: Log respons API
+        print(f"DEBUG: Status Code: {response.status_code}")
+        print(f"DEBUG: Response Text: {response.text[:500]}")  # Batasi output untuk keterbacaan
+        
+        response.raise_for_status()
+        
+        result = response.json()
+        
+        if result.get('status') != 'success':
+            raise Exception(result.get('message', 'Gagal menyimpan transaksi'))
+
+        # 10. Proses setelah transaksi berhasil
+        if print_receipt_var.get():
+            print_receipt(
+                items=items,
+                total=total,
+                amount_paid=amount_paid,
+                payment_method=payment_method_name,
+                customer_info=current_customer,
+                discount=discount,
+                tax=tax,
+                receipt_no=result.get('receipt_no'),
+                sale_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            )
+        
+        if open_drawer_var.get():
+            open_cash_drawer()
+
+        # Reset form transaksi
+        for item in tree_main.get_children():
+            tree_main.delete(item)
+            
+        entry_discount.delete(0, tk.END)
+        entry_tax.delete(0, tk.END)
+        entry_amount_paid.delete(0, tk.END)
+        
+        entry_discount.insert(0, "0.00")
+        entry_tax.insert(0, "0.00")
+        
+        update_totals()
+        item_counter = 1
+        current_customer = None
+        
+        load_today_sales()
+        
+        if 'update_shift_display' in globals():
+            update_shift_display()
+
+        messagebox.showinfo("Sukses", "Transaksi berhasil diselesaikan!")
+
+    except requests.exceptions.RequestException as e:
+        messagebox.showerror("Error", f"Gagal terhubung ke server: {str(e)}")
+        print(f"DEBUG: Request Exception: {str(e)}")
+    except Exception as e:
+        messagebox.showerror("Error", f"Gagal menyelesaikan transaksi: {str(e)}")
+        print(f"DEBUG: Error detail: {str(e)}")
+        import traceback
+        traceback.print_exc()
+        
 def open_cashier_dashboard(user_id):
     dashboard = tk.Tk()
     dashboard.title("Sistem Kasir")
