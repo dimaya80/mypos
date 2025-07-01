@@ -289,163 +289,6 @@ def show_login_window():
     entry_username.focus()
     root.bind('<Return>', lambda e: login())
     root.mainloop()
-
-def complete_transaction():
-    global item_counter, current_customer, current_user_id
-    
-    # 1. Validasi user_id
-    if not current_user_id:
-        messagebox.showerror("Error", "User ID tidak tersedia. Silakan login kembali.")
-        return
-
-    # 2. Kumpulkan item dari keranjang belanja
-    items = []
-    for item in tree_main.get_children():
-        try:
-            values = tree_main.item(item, 'values')
-            product_name = values[1]
-            quantity = int(values[3])
-            
-            # Format harga dengan benar
-            price_str = values[2].replace("RM", "").strip()
-            unit_price = round(float(price_str), 4)
-            total_price = round(unit_price * quantity, 4)
-            
-            items.append({
-                'name': product_name,
-                'price': unit_price,
-                'quantity': quantity,
-                'total': total_price
-            })
-        except (IndexError, ValueError) as e:
-            messagebox.showerror("Error", f"Format item tidak valid: {str(e)}")
-            return
-
-    # 3. Validasi keranjang belanja
-    if not items:
-        messagebox.showwarning("Peringatan", "Tidak ada item dalam keranjang!")
-        return
-
-    # 4. Cek stok untuk semua item
-    for item in items:
-        if not check_stock(item['name'], item['quantity']):
-            messagebox.showwarning("Stok Habis", f"Stok {item['name']} tidak mencukupi!")
-            return
-
-    # 5. Hitung total transaksi
-    try:
-        subtotal = sum(item['total'] for item in items)
-        discount = float(entry_discount.get() or 0)
-        tax = float(entry_tax.get() or 0)
-        total = subtotal - discount + tax
-    except ValueError:
-        messagebox.showerror("Error", "Input diskon atau pajak tidak valid")
-        return
-
-    # 6. Proses pembayaran
-    payment_method_name = payment_var.get()
-    
-    try:
-        amount_paid = float(entry_amount_paid.get() or 0)
-    except ValueError:
-        amount_paid = 0
-
-    # 7. Validasi khusus untuk pembayaran hutang
-    if payment_method_name == "Hutang":
-        if not current_customer or not current_customer.get('name'):
-            messagebox.showwarning("Peringatan", "Data pelanggan wajib diisi untuk pembayaran hutang!")
-            return
-        amount_paid = 0.00
-    elif amount_paid <= 0:
-        messagebox.showwarning("Peringatan", "Harap masukkan jumlah pembayaran")
-        return
-    elif amount_paid < total:
-        messagebox.showwarning("Peringatan", "Jumlah pembayaran kurang dari total")
-        return
-
-    # 8. Siapkan data transaksi
-    try:
-        payment_method_id = [k for k, v in payment_methods.items() if v == payment_method_name][0]
-        
-        transaction_data = {
-            'action': 'save_transaction',
-            'items': items,
-            'total': total,
-            'discount': discount,
-            'tax': tax,
-            'payment_method_id': payment_method_id,
-            'payment_method': payment_method_name,
-            'amount_paid': amount_paid,
-            'customer_info': current_customer if payment_method_name == "Hutang" else None,
-            'user_id': current_user_id
-        }
-
-        # Debugging: Log data transaksi dan user_id
-        print(f"DEBUG: current_user_id: {current_user_id}")
-        print(f"DEBUG: Data transaksi yang dikirim:\n{json.dumps(transaction_data, indent=2)}")
-
-        # 9. Kirim ke API
-        headers = {'Content-Type': 'application/json'}
-        response = requests.post(API_URL, json=transaction_data, headers=headers, timeout=10)
-        
-        # Debugging: Log respons API
-        print(f"DEBUG: Status Code: {response.status_code}")
-        print(f"DEBUG: Response Text: {response.text[:500]}")  # Batasi output untuk keterbacaan
-        
-        response.raise_for_status()
-        
-        result = response.json()
-        
-        if result.get('status') != 'success':
-            raise Exception(result.get('message', 'Gagal menyimpan transaksi'))
-
-        # 10. Proses setelah transaksi berhasil
-        if print_receipt_var.get():
-            print_receipt(
-                items=items,
-                total=total,
-                amount_paid=amount_paid,
-                payment_method=payment_method_name,
-                customer_info=current_customer,
-                discount=discount,
-                tax=tax,
-                receipt_no=result.get('receipt_no'),
-                sale_date=datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            )
-        
-        if open_drawer_var.get():
-            open_cash_drawer()
-
-        # Reset form transaksi
-        for item in tree_main.get_children():
-            tree_main.delete(item)
-            
-        entry_discount.delete(0, tk.END)
-        entry_tax.delete(0, tk.END)
-        entry_amount_paid.delete(0, tk.END)
-        
-        entry_discount.insert(0, "0.00")
-        entry_tax.insert(0, "0.00")
-        
-        update_totals()
-        item_counter = 1
-        current_customer = None
-        
-        load_today_sales()
-        
-        if 'update_shift_display' in globals():
-            update_shift_display()
-
-        messagebox.showinfo("Sukses", "Transaksi berhasil diselesaikan!")
-
-    except requests.exceptions.RequestException as e:
-        messagebox.showerror("Error", f"Gagal terhubung ke server: {str(e)}")
-        print(f"DEBUG: Request Exception: {str(e)}")
-    except Exception as e:
-        messagebox.showerror("Error", f"Gagal menyelesaikan transaksi: {str(e)}")
-        print(f"DEBUG: Error detail: {str(e)}")
-        import traceback
-        traceback.print_exc()
         
 def open_cashier_dashboard(user_id):
     dashboard = tk.Tk()
@@ -487,7 +330,7 @@ def open_cashier_dashboard(user_id):
             label_shift_info.configure(text=info)
         except Exception as e:
             label_shift_info.configure(text="Shift Info: Tidak dapat hubung API")
-        dashboard.after(10000, update_shift_info)
+        dashboard.after(10000, update_shift_info)  # auto refresh setiap 10 saat
     update_shift_info()
 
     print_receipt_var = tk.BooleanVar(value=True)
@@ -519,24 +362,19 @@ def open_cashier_dashboard(user_id):
     style.theme_use("clam")
     style.configure("Cart.Treeview", font=("Arial", 18, "bold"), rowheight=38)
     style.configure("Cart.Treeview.Heading", font=("Arial", 15, "bold"))
-    columns = ("ID", "Nama Produk", "Harga", "Kuantiti", "Total", "Timbang", "Unit")
+    columns = ("ID", "Nama Produk", "Harga", "Kuantiti", "Total")
     tree_main = ttk.Treeview(cart_frame, columns=columns, show="headings", style="Cart.Treeview")
     tree_main.heading("ID", text="ID")
     tree_main.column("ID", width=60)
     tree_main.heading("Nama Produk", text="Nama Produk")
     tree_main.column("Nama Produk", width=220)
     tree_main.heading("Harga", text="Harga")
-    tree_main.column("Harga", width=150)
+    tree_main.column("Harga", width=120)
     tree_main.heading("Kuantiti", text="Kuantiti")
     tree_main.column("Kuantiti", width=100)
     tree_main.heading("Total", text="Total")
     tree_main.column("Total", width=140)
-    tree_main.heading("Timbang", text="Timbang")
-    tree_main.column("Timbang", width=0)  # Sembunyikan kolum timbang
-    tree_main.heading("Unit", text="Unit")
-    tree_main.column("Unit", width=0)  # Sembunyikan kolum unit (tapi simpan untuk logic)
     tree_main.pack(fill="both", expand=True, padx=10, pady=10)
-
     sales_frame = tk.Frame(notebook)
     notebook.add(sales_frame, text="Jualan Hari Ini")
     sales_columns = ("No", "Resit", "Tarikh/Masa", "Jumlah", "Diskaun", "Jumlah Bayaran", "Baki Pulangan", "Kaedah Bayaran", "Status")
@@ -547,6 +385,66 @@ def open_cashier_dashboard(user_id):
     sales_tree.pack(fill="both", expand=True, padx=10, pady=10)
     sales_btn_frame = tk.Frame(sales_frame)
     sales_btn_frame.pack(fill="x", padx=10, pady=(6,2))
+
+    def load_today_sales():
+        sales_tree.delete(*sales_tree.get_children())
+        today = datetime.now().strftime("%Y-%m-%d")
+        try:
+            response = requests.get(f"{API_URL}?action=get_today_sales&date={today}", timeout=5)
+            data = response.json()
+            if data.get('status') == 'success':
+                for sale in data['data']:
+                    sales_tree.insert("", "end", values=(
+                        sale['no'], sale['receipt_no'], sale['sale_time'],
+                        f"RM {float(sale['total']):.2f}", f"RM {float(sale['discount']):.2f}",
+                        f"RM {float(sale['amount_paid']):.2f}", f"RM {float(sale['change_given']):.2f}",
+                        sale['payment_method'], sale['status']
+                    ))
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal muat jualan: {str(e)}")
+
+    def print_selected_receipt():
+        selected = sales_tree.focus()
+        if not selected:
+            messagebox.showwarning("Peringatan", "Sila pilih satu resit dari senarai!")
+            return
+        vals = sales_tree.item(selected, 'values')
+        if len(vals) < 2:
+            messagebox.showwarning("Peringatan", "Data resit tidak lengkap!")
+            return
+        receipt_no = vals[1]
+        try:
+            res = requests.get(f"{API_URL}?action=get_transaction&receipt_no={receipt_no}", timeout=8)
+            data = res.json()
+            if data.get('status') != 'success' or 'data' not in data:
+                raise Exception(data.get('message', 'Gagal ambil data transaksi'))
+            trx = data['data']
+            items = trx['items']
+            total = float(trx['total'])
+            amount_paid = float(trx['amount_paid'])
+            payment_method = trx['payment_method']
+            discount = float(trx.get('discount', 0))
+            tax = float(trx.get('tax', 0))
+            sale_date = trx.get('sale_date')
+            customer_info = trx.get('customer_info', None)
+            print_receipt(
+                items=items,
+                total=total,
+                amount_paid=amount_paid,
+                payment_method=payment_method,
+                customer_info=customer_info,
+                discount=discount,
+                tax=tax,
+                receipt_no=receipt_no,
+                sale_date=sale_date
+            )
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal dapatkan/print resit: {str(e)}")
+
+    btn_refresh = tk.Button(sales_btn_frame, text="Refresh", command=load_today_sales, bg="#3498db", fg="white", font=("Arial", 11, "bold"))
+    btn_refresh.pack(side="left", padx=2)
+    btn_print = tk.Button(sales_btn_frame, text="Print Resit", command=print_selected_receipt, bg="#27ae60", fg="white", font=("Arial", 11, "bold"))
+    btn_print.pack(side="left", padx=2)
 
     low_stock_frame = tk.Frame(notebook)
     notebook.add(low_stock_frame, text="Stok Rendah")
@@ -596,63 +494,13 @@ def open_cashier_dashboard(user_id):
     button_grid.columnconfigure(0, weight=1)
     button_grid.columnconfigure(1, weight=1)
 
-    ctk.CTkButton(
-        right, text="Selesaikan Transaksi", font=("Arial", 19, "bold"),
-        fg_color="#32CD32", command=lambda: complete_transaction()
-    ).pack(fill="x", padx=30, pady=30)
-
-    subtotal_frame = ctk.CTkFrame(right)
-    subtotal_frame.pack(fill="x", padx=10, pady=2)
-    ctk.CTkLabel(subtotal_frame, text="Subtotal:", font=("Arial", 16)).pack(side="left")
-    label_subtotal = ctk.CTkLabel(subtotal_frame, text="RM 0.00", font=("Arial", 18, "bold"))
-    label_subtotal.pack(side="right")
-    discount_frame = ctk.CTkFrame(right)
-    discount_frame.pack(fill="x", padx=10, pady=2)
-    ctk.CTkLabel(discount_frame, text="Diskaun:", font=("Arial", 16)).pack(side="left")
-    entry_discount = ctk.CTkEntry(discount_frame, font=("Arial", 18, "bold"), width=120)
-    entry_discount.insert(0, "0.00")
-    entry_discount.pack(side="right")
-    entry_discount.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_discount))
-    tax_frame = ctk.CTkFrame(right)
-    tax_frame.pack(fill="x", padx=10, pady=2)
-    ctk.CTkLabel(tax_frame, text="Cukai:", font=("Arial", 16)).pack(side="left")
-    entry_tax = ctk.CTkEntry(tax_frame, font=("Arial", 18, "bold"), width=120)
-    entry_tax.insert(0, "0.00")
-    entry_tax.pack(side="right")
-    entry_tax.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_tax))
-    total_frame = ctk.CTkFrame(right)
-    total_frame.pack(fill="x", padx=10, pady=7)
-    ctk.CTkLabel(total_frame, text="Total:", font=("Arial", 18, "bold")).pack(side="left")
-    label_total = ctk.CTkLabel(total_frame, text="RM 0.00", font=("Arial", 22, "bold"))
-    label_total.pack(side="right")
-    method_frame = ctk.CTkFrame(right)
-    method_frame.pack(fill="x", padx=10, pady=2)
-    ctk.CTkLabel(method_frame, text="Kaedah Bayar:", font=("Arial", 15)).pack(anchor="w")
-    payment_var = tk.StringVar(value="Tunai")
-    for m in ["Tunai", "Hutang", "Kad Kredit/Debit", "Online Transfer", "QR Kod"]:
-        ctk.CTkRadioButton(method_frame, text=m, variable=payment_var, value=m, font=("Arial", 14)).pack(anchor="w")
-    amount_paid_frame = ctk.CTkFrame(right)
-    amount_paid_frame.pack(fill="x", padx=10, pady=2)
-    ctk.CTkLabel(amount_paid_frame, text="Jumlah Bayar:", font=("Arial", 16)).pack(side="left")
-    entry_amount_paid = ctk.CTkEntry(amount_paid_frame, font=("Arial", 18, "bold"), width=120)
-    entry_amount_paid.pack(side="right")
-    entry_amount_paid.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_amount_paid))
-    change_frame = ctk.CTkFrame(right)
-    change_frame.pack(fill="x", padx=10, pady=2)
-    ctk.CTkLabel(change_frame, text="Baki:", font=("Arial", 16)).pack(side="left")
-    label_change = ctk.CTkLabel(change_frame, text="RM 0.00", font=("Arial", 18, "bold"))
-    label_change.pack(side="right")
-
+    # ========== FUNGSI TRANSAKSI ==========
     item_counter = [1]
     customer_data = {}
 
     def update_totals(*args):
         try:
-            subtotal = 0.0
-            for item in tree_main.get_children():
-                v = tree_main.item(item, 'values')
-                total_str = v[4]
-                subtotal += float(total_str.replace("RM", "").replace(",", "").strip())
+            subtotal = sum(float(tree_main.item(item, 'values')[4].replace("RM", "")) for item in tree_main.get_children())
             discount = float(entry_discount.get() or 0)
             tax = float(entry_tax.get() or 0)
             total = subtotal - discount + tax
@@ -708,6 +556,7 @@ def open_cashier_dashboard(user_id):
         win.grab_set()
         win.wait_window()
 
+    # PATCH: scan_barcode sokong timbang
     def scan_barcode(barcode):
         if not barcode:
             return
@@ -721,12 +570,12 @@ def open_cashier_dashboard(user_id):
             product_name = product['name']
             price_float = float(product['price'])
             is_weighable = int(product.get('is_weighable', 0))
-            unit = product.get("unit_of_measurement", "kg" if is_weighable else "unit")
             if is_weighable:
+                # Popup tanya berat KG
                 win = tk.Toplevel()
-                win.title("Masukkan Berat")
+                win.title("Masukkan Berat (KG)")
                 win.geometry("320x120")
-                tk.Label(win, text=f"Masukkan berat ({unit}) untuk {product_name}:", font=("Arial", 13)).pack()
+                tk.Label(win, text=f"Masukkan berat (kg) untuk {product_name}:", font=("Arial", 13)).pack()
                 qty_entry = tk.Entry(win, font=("Arial", 15), width=10)
                 qty_entry.pack(pady=7)
                 qty_entry.focus()
@@ -739,7 +588,7 @@ def open_cashier_dashboard(user_id):
                         result['quantity'] = q
                         win.destroy()
                     except:
-                        messagebox.showerror("Input Salah", f"Sila masukkan {unit} (cth: 0.185)", parent=win)
+                        messagebox.showerror("Input Salah", "Sila masukkan berat dalam KG (cth: 0.185)", parent=win)
                 tk.Button(win, text="OK", command=submit_qty, width=10).pack()
                 win.transient()
                 win.grab_set()
@@ -754,84 +603,20 @@ def open_cashier_dashboard(user_id):
                     if values[1] == product_name:
                         new_quantity = int(values[3]) + 1
                         new_total = new_quantity * price_float
-                        harga_str = f"RM {price_float:.2f} / {unit}"
                         tree_main.item(item, values=(
-                            values[0], values[1], harga_str, new_quantity, f"RM {new_total:.2f}", values[5], unit
+                            values[0], values[1], f"RM {price_float:.2f}", new_quantity, f"RM {new_total:.2f}"
                         ))
                         update_totals()
                         entry_barcode.delete(0, tk.END)
                         return
             idx = item_counter[0]
             total = quantity * price_float
-            harga_str = f"RM {price_float:.2f} / {unit}"
-            tree_main.insert("", "end", values=(idx, product_name, harga_str, quantity, f"RM {total:.2f}", is_weighable, unit))
+            tree_main.insert("", "end", values=(idx, product_name, f"RM {price_float:.2f}", quantity, f"RM {total:.2f}"))
             item_counter[0] += 1
             update_totals()
             entry_barcode.delete(0, tk.END)
         except Exception as e:
             messagebox.showerror("Error", f"Gagal scan barcode: {str(e)}")
-
-    def update_quantity_modal(item_id, tree):
-        selected_item = None
-        for item in tree.get_children():
-            if tree.item(item, 'values')[0] == item_id:
-                selected_item = item
-                break
-        if not selected_item:
-            return
-        current_values = tree.item(selected_item, 'values')
-        product_name = current_values[1]
-        current_quantity = current_values[3]
-        try:
-            is_weighable = bool(int(current_values[5]))
-            unit = current_values[6] if len(current_values) > 6 else "unit"
-        except Exception:
-            is_weighable = False
-            unit = "unit"
-        modal = tk.Toplevel(dashboard)
-        modal.title(f"Kemaskini Kuantiti: {product_name}")
-        modal.geometry("320x160")
-        tk.Label(modal, text=f"Produk: {product_name}", font=("Arial", 13, "bold")).pack(pady=10)
-        tk.Label(modal, text=f"Kuantiti Baru ({unit}):", font=("Arial", 13)).pack(pady=5)
-        quantity_entry = tk.Entry(modal, font=("Arial", 14), width=10)
-        quantity_entry.insert(0, str(current_quantity))
-        quantity_entry.pack(pady=5)
-        quantity_entry.focus()
-        def submit_quantity():
-            try:
-                val = quantity_entry.get().strip()
-                if is_weighable:
-                    new_quantity = float(val)
-                    if new_quantity < 0.001:
-                        raise ValueError(f"Kuantiti mestilah > 0 {unit}")
-                else:
-                    if '.' in val:
-                        raise ValueError(f"Kuantiti untuk barang ini mesti nombor bulat")
-                    new_quantity = int(val)
-                    if new_quantity < 1:
-                        raise ValueError(f"Kuantiti mestilah > 0")
-                price = float(current_values[2].split(" ")[1]) # Ambil harga sahaja dari "RM xx.xx / unit"
-                harga_str = f"RM {price:.2f} / {unit}"
-                new_total = price * new_quantity
-                tree.item(selected_item, values=(
-                    current_values[0], current_values[1], harga_str, new_quantity, f"RM {new_total:.2f}", current_values[5], unit
-                ))
-                update_totals()
-                modal.destroy()
-            except Exception as e:
-                messagebox.showerror("Input Tidak Sah", str(e), parent=modal)
-                quantity_entry.focus()
-        tk.Button(modal, text="Simpan", command=submit_quantity, width=12, bg="#32CD32", fg="white").pack(pady=10)
-        tk.Button(modal, text="Batal", command=modal.destroy, width=12).pack()
-        modal.bind('<Return>', lambda e: submit_quantity())
-
-    def tree_main_double_click(event):
-        sel = tree_main.focus()
-        if not sel:
-            return
-        item_id = tree_main.item(sel, 'values')[0]
-        update_quantity_modal(item_id, tree_main)
-    tree_main.bind("<Double-1>", tree_main_double_click)
 
     def remove_item():
         selected = tree_main.selection()
@@ -839,29 +624,26 @@ def open_cashier_dashboard(user_id):
             messagebox.showwarning("Peringatan", "Pilih item untuk dihapus")
             return
         tree_main.delete(selected)
-        # Reset semula index ID dalam troli
-        for i, item in enumerate(tree_main.get_children(), 1):
+        item_counter[0] = 1
+        for item in tree_main.get_children():
             values = tree_main.item(item, 'values')
-            tree_main.item(item, values=(i, values[1], values[2], values[3], values[4], values[5], values[6]))
+            tree_main.item(item, values=(item_counter[0], values[1], values[2], values[3], values[4]))
+            item_counter[0] += 1
         update_totals()
 
     def open_search_product():
         win = tk.Toplevel(dashboard)
         win.title("Cari Produk")
-        win.geometry("800x500")
+        win.geometry("700x500")
         tk.Label(win, text="Cari:").pack(anchor="w")
         search_var = tk.StringVar()
         search_entry = tk.Entry(win, textvariable=search_var, font=("Arial", 14), width=30)
         search_entry.pack(anchor="w", padx=10)
         search_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(search_entry))
-        results_tree = ttk.Treeview(win, columns=("Nama", "Harga", "Stok", "Barcode", "Timbang", "Unit"), show="headings", height=12)
-        for col in ("Nama", "Harga", "Stok", "Barcode"):
+        results_tree = ttk.Treeview(win, columns=("Nama", "Harga", "Stok", "Barcode"), show="headings", height=12)
+        for col in results_tree["columns"]:
             results_tree.heading(col, text=col)
             results_tree.column(col, width=150)
-        results_tree.heading("Timbang", text="Timbang")
-        results_tree.column("Timbang", width=0)
-        results_tree.heading("Unit", text="Unit")
-        results_tree.column("Unit", width=0)
         results_tree.pack(fill="both", expand=True, padx=10, pady=10)
         def do_search(*args):
             query = search_var.get().strip()
@@ -877,16 +659,9 @@ def open_cashier_dashboard(user_id):
                 products = data['data']
                 results_tree.delete(*results_tree.get_children())
                 for product in products:
-                    is_weighable = int(product.get("is_weighable", 0))
-                    unit = product.get("unit_of_measurement", "kg" if is_weighable else "unit")
-                    harga_str = f"RM {float(product.get('price', 0)):.2f} / {unit}"
                     results_tree.insert("", "end", values=(
-                        product.get("name", ""),
-                        harga_str,
-                        product.get("stock", ""),
-                        product.get("barcode", ""),
-                        is_weighable,
-                        unit
+                        product.get("name", ""), f"RM {float(product.get('price', 0)):.2f}",
+                        product.get("stock", ""), product.get("barcode", "")
                     ))
             except Exception as e:
                 messagebox.showerror("Error", str(e), parent=win)
@@ -897,23 +672,20 @@ def open_cashier_dashboard(user_id):
                 return
             vals = results_tree.item(selected, "values")
             product_name = vals[0]
-            harga_str = vals[1]
-            is_weighable = int(vals[4])
-            unit = vals[5]
-            price = float(harga_str.split(" ")[1].replace("/", "").strip())
+            price_str = vals[1].replace("RM", "").strip()
+            price = float(price_str)
             for item in tree_main.get_children():
                 v = tree_main.item(item, 'values')
                 if v[1] == product_name:
                     new_quantity = int(v[3]) + 1
                     new_total = new_quantity * price
-                    harga_str = f"RM {price:.2f} / {unit}"
-                    tree_main.item(item, values=(v[0], v[1], harga_str, new_quantity, f"RM {new_total:.2f}", v[5], unit))
+                    tree_main.item(item, values=(v[0], v[1], f"RM {price:.2f}", new_quantity, f"RM {new_total:.2f}"))
                     update_totals()
                     win.destroy()
                     return
-            idx = len(tree_main.get_children()) + 1
-            harga_str = f"RM {price:.2f} / {unit}"
-            tree_main.insert("", "end", values=(idx, product_name, harga_str, 1, f"RM {price:.2f}", is_weighable, unit))
+            idx = item_counter[0]
+            tree_main.insert("", "end", values=(idx, product_name, f"RM {price:.2f}", 1, f"RM {price:.2f}"))
+            item_counter[0] += 1
             update_totals()
             win.destroy()
         search_var.trace_add("write", do_search)
@@ -972,6 +744,14 @@ def open_cashier_dashboard(user_id):
         win.grab_set()
         win.wait_window()
 
+    def on_low_stock_double(event):
+        selected = tree_low_stock.focus()
+        if not selected:
+            return
+        vals = tree_low_stock.item(selected, "values")
+        if len(vals) >= 2:
+            show_restock_form(product_name=vals[1], stock=vals[2])
+
     def load_low_stock_products():
         tree_low_stock.delete(*tree_low_stock.get_children())
         try:
@@ -986,70 +766,199 @@ def open_cashier_dashboard(user_id):
         except Exception as e:
             messagebox.showerror("Error", f"Gagal muat stok rendah: {str(e)}")
 
-    def on_low_stock_double(event):
-        selected = tree_low_stock.focus()
-        if not selected:
+    # PATCH: update_quantity_modal untuk support timbang
+    def update_quantity_modal(item_id, tree):
+        selected_item = None
+        for item in tree.get_children():
+            if tree.item(item, 'values')[0] == item_id:
+                selected_item = item
+                break
+        if not selected_item:
             return
-        vals = tree_low_stock.item(selected, "values")
-        if len(vals) >= 2:
-            show_restock_form(product_name=vals[1], stock=vals[2])
+        current_values = tree.item(selected_item, 'values')
+        product_name = current_values[1]
+        current_quantity = current_values[3]
+        is_weighable = False
+        try:
+            is_weighable = (float(current_quantity) != int(float(current_quantity)))
+        except Exception:
+            is_weighable = False
+        modal = tk.Toplevel(tree.master)
+        modal.title(f"Kemaskini Kuantiti: {product_name}")
+        modal.geometry("320x160")
+        tk.Label(modal, text=f"Produk: {product_name}", font=("Arial", 13, "bold")).pack(pady=10)
+        tk.Label(modal, text="Kuantiti Baru:", font=("Arial", 13)).pack(pady=5)
+        quantity_entry = tk.Entry(modal, font=("Arial", 14), width=10)
+        quantity_entry.insert(0, str(current_quantity))
+        quantity_entry.pack(pady=5)
+        quantity_entry.focus()
+        if hasattr(CTkVirtualKeyboard, "set_target_entry"):
+            quantity_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(quantity_entry))
+        def submit_quantity():
+            try:
+                val = quantity_entry.get().strip()
+                if is_weighable:
+                    new_quantity = float(val)
+                    if new_quantity < 0.001:
+                        raise ValueError("Kuantiti mestilah > 0")
+                else:
+                    if '.' in val:
+                        raise ValueError("Kuantiti untuk barang unit mesti nombor bulat")
+                    new_quantity = int(val)
+                    if new_quantity < 1:
+                        raise ValueError("Kuantiti mestilah > 0")
+                price = float(current_values[2].replace("RM", ""))
+                new_total = price * new_quantity
+                tree.item(selected_item, values=(
+                    current_values[0], current_values[1], current_values[2], new_quantity, f"RM {new_total:.2f}"
+                ))
+                update_totals()
+                modal.destroy()
+            except Exception as e:
+                messagebox.showerror("Input Tidak Sah", str(e), parent=modal)
+                quantity_entry.focus()
+        tk.Button(modal, text="Simpan", command=submit_quantity, width=12, bg="#32CD32", fg="white").pack(pady=10)
+        tk.Button(modal, text="Batal", command=modal.destroy, width=12).pack()
+        modal.bind('<Return>', lambda e: submit_quantity())
+
+    def tree_main_double_click(event):
+        sel = tree_main.focus()
+        if not sel:
+            return
+        item_id = tree_main.item(sel, 'values')[0]
+        update_quantity_modal(item_id, tree_main)
+    tree_main.bind("<Double-1>", tree_main_double_click)
     tree_low_stock.bind("<Double-1>", on_low_stock_double)
 
-    def load_today_sales():
-        sales_tree.delete(*sales_tree.get_children())
-        today = datetime.now().strftime("%Y-%m-%d")
+    # ========== FUNGSI UTAMA SELESAIKAN TRANSAKSI ==========
+    def complete_transaction():
+        print("---- DEBUG: Butang Selesaikan Transaksi ditekan! ----")
         try:
-            response = requests.get(f"{API_URL}?action=get_today_sales&date={today}", timeout=5)
-            data = response.json()
-            if data.get('status') == 'success':
-                for sale in data['data']:
-                    sales_tree.insert("", "end", values=(
-                        sale['no'], sale['receipt_no'], sale['sale_time'],
-                        f"RM {float(sale['total']):.2f}", f"RM {float(sale['discount']):.2f}",
-                        f"RM {float(sale['amount_paid']):.2f}", f"RM {float(sale['change_given']):.2f}",
-                        sale['payment_method'], sale['status']
-                    ))
-        except Exception as e:
-            messagebox.showerror("Error", f"Gagal muat jualan: {str(e)}")
+            items = []
+            for item in tree_main.get_children():
+                values = tree_main.item(item, 'values')
+                product_name = values[1]
+                qty = float(values[3])
+                price = float(values[2].replace("RM", ""))
+                total = float(values[4].replace("RM", ""))
+                items.append({
+                    'name': product_name,
+                    'quantity': qty,
+                    'price': price,
+                    'total': total
+                })
+            if not items:
+                messagebox.showwarning("Peringatan", "Tidak ada item dalam troli!")
+                return
+            subtotal = sum(i["total"] for i in items)
+            discount = float(entry_discount.get() or 0)
+            tax = float(entry_tax.get() or 0)
+            total = subtotal - discount + tax
+            payment_method = payment_var.get()
+            payment_method_map = {
+                "Tunai": 1,
+                "Hutang": 2,
+                "Kad Kredit/Debit": 3,
+                "Online Transfer": 4,
+                "QR Kod": 5
+            }
+            payment_method_id = payment_method_map.get(payment_method, 1)
+            if payment_method == "Hutang":
+                if not customer_data.get("name"):
+                    messagebox.showwarning("Peringatan", "Maklumat pelanggan hutang perlu diisi!")
+                    return
+                amount_paid = 0.0
+            else:
+                amount_paid = float(entry_amount_paid.get() or 0)
+                if amount_paid < total:
+                    messagebox.showwarning("Peringatan", "Jumlah bayar kurang dari total")
+                    return
+            transaction_data = {
+                "action": "save_transaction",
+                "items": items,
+                "total": total,
+                "discount": discount,
+                "tax": tax,
+                "amount_paid": amount_paid,
+                "user_id": user_id,
+                "payment_method": payment_method,
+                "payment_method_id": payment_method_id,
+                "customer_info": customer_data if payment_method == "Hutang" else None
+            }
+            response = requests.post(API_URL, json=transaction_data, timeout=10)
+            result = response.json()
+            if result.get("status") != "success":
+                messagebox.showerror("Error", result.get("message", "Gagal simpan transaksi"))
+                return
 
-    def print_selected_receipt():
-        selected = sales_tree.focus()
-        if not selected:
-            messagebox.showwarning("Peringatan", "Sila pilih satu resit dari senarai!")
-            return
-        vals = sales_tree.item(selected, 'values')
-        if len(vals) < 2:
-            messagebox.showwarning("Peringatan", "Data resit tidak lengkap!")
-            return
-        receipt_no = vals[1]
-        try:
-            res = requests.get(f"{API_URL}?action=get_transaction&receipt_no={receipt_no}", timeout=8)
-            data = res.json()
-            if data.get('status') != 'success' or 'data' not in data:
-                raise Exception(data.get('message', 'Gagal ambil data transaksi'))
-            trx = data['data']
-            items = trx['items']
-            total = float(trx['total'])
-            amount_paid = float(trx['amount_paid'])
-            payment_method = trx['payment_method']
-            discount = float(trx.get('discount', 0))
-            tax = float(trx.get('tax', 0))
-            sale_date = trx.get('sale_date')
-            customer_info = trx.get('customer_info', None)
-            print_receipt(
-                items=items,
-                total=total,
-                amount_paid=amount_paid,
-                payment_method=payment_method,
-                customer_info=customer_info,
-                discount=discount,
-                tax=tax,
-                receipt_no=receipt_no,
-                sale_date=sale_date
-            )
-        except Exception as e:
-            messagebox.showerror("Error", f"Gagal dapatkan/print resit: {str(e)}")
+            if print_receipt_var.get():
+                print_receipt(items, total, amount_paid, payment_method)
+            if open_drawer_var.get():
+                open_cash_drawer()
 
+            messagebox.showinfo("Sukses", "Transaksi berjaya!")
+            for item in tree_main.get_children():
+                tree_main.delete(item)
+            entry_discount.delete(0, tk.END)
+            entry_tax.delete(0, tk.END)
+            entry_amount_paid.delete(0, tk.END)
+            entry_discount.insert(0, "0.00")
+            entry_tax.insert(0, "0.00")
+            customer_data.clear()
+            update_totals()
+            load_today_sales()
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal proses transaksi: {str(e)}")
+
+    ctk.CTkButton(
+        right, text="Selesaikan Transaksi", font=("Arial", 19, "bold"),
+        fg_color="#32CD32", command=complete_transaction
+    ).pack(fill="x", padx=30, pady=30)
+
+    subtotal_frame = ctk.CTkFrame(right)
+    subtotal_frame.pack(fill="x", padx=10, pady=2)
+    ctk.CTkLabel(subtotal_frame, text="Subtotal:", font=("Arial", 16)).pack(side="left")
+    label_subtotal = ctk.CTkLabel(subtotal_frame, text="RM 0.00", font=("Arial", 18, "bold"))
+    label_subtotal.pack(side="right")
+    discount_frame = ctk.CTkFrame(right)
+    discount_frame.pack(fill="x", padx=10, pady=2)
+    ctk.CTkLabel(discount_frame, text="Diskaun:", font=("Arial", 16)).pack(side="left")
+    entry_discount = ctk.CTkEntry(discount_frame, font=("Arial", 18, "bold"), width=120)
+    entry_discount.insert(0, "0.00")
+    entry_discount.pack(side="right")
+    entry_discount.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_discount))
+    tax_frame = ctk.CTkFrame(right)
+    tax_frame.pack(fill="x", padx=10, pady=2)
+    ctk.CTkLabel(tax_frame, text="Cukai:", font=("Arial", 16)).pack(side="left")
+    entry_tax = ctk.CTkEntry(tax_frame, font=("Arial", 18, "bold"), width=120)
+    entry_tax.insert(0, "0.00")
+    entry_tax.pack(side="right")
+    entry_tax.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_tax))
+    total_frame = ctk.CTkFrame(right)
+    total_frame.pack(fill="x", padx=10, pady=7)
+    ctk.CTkLabel(total_frame, text="Total:", font=("Arial", 18, "bold")).pack(side="left")
+    label_total = ctk.CTkLabel(total_frame, text="RM 0.00", font=("Arial", 22, "bold"))
+    label_total.pack(side="right")
+    method_frame = ctk.CTkFrame(right)
+    method_frame.pack(fill="x", padx=10, pady=2)
+    ctk.CTkLabel(method_frame, text="Kaedah Bayar:", font=("Arial", 15)).pack(anchor="w")
+    payment_var = tk.StringVar(value="Tunai")
+    for m in ["Tunai", "Hutang", "Kad Kredit/Debit", "Online Transfer", "QR Kod"]:
+        ctk.CTkRadioButton(method_frame, text=m, variable=payment_var, value=m, font=("Arial", 14)).pack(anchor="w")
+    amount_paid_frame = ctk.CTkFrame(right)
+    amount_paid_frame.pack(fill="x", padx=10, pady=2)
+    ctk.CTkLabel(amount_paid_frame, text="Jumlah Bayar:", font=("Arial", 16)).pack(side="left")
+    entry_amount_paid = ctk.CTkEntry(amount_paid_frame, font=("Arial", 18, "bold"), width=120)
+    entry_amount_paid.pack(side="right")
+    entry_amount_paid.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_amount_paid))
+    change_frame = ctk.CTkFrame(right)
+    change_frame.pack(fill="x", padx=10, pady=2)
+    ctk.CTkLabel(change_frame, text="Baki:", font=("Arial", 16)).pack(side="left")
+    label_change = ctk.CTkLabel(change_frame, text="RM 0.00", font=("Arial", 18, "bold"))
+    label_change.pack(side="right")
+
+    dashboard.bind('<F3>', lambda e: CTkVirtualKeyboard(dashboard))
+    dashboard.after(700, lambda: CTkVirtualKeyboard(dashboard))
     entry_barcode.bind("<Return>", lambda e: scan_barcode(entry_barcode.get()))
     entry_discount.bind("<KeyRelease>", update_totals)
     entry_tax.bind("<KeyRelease>", update_totals)
@@ -1061,7 +970,6 @@ def open_cashier_dashboard(user_id):
         label_change.configure(text="Hutang" if payment_var.get() == "Hutang" else "RM 0.00", text_color="orange" if payment_var.get() == "Hutang" else "white")
     ))
 
-    dashboard.after(700, lambda: CTkVirtualKeyboard(dashboard))
     load_today_sales()
     load_low_stock_products()
     dashboard.mainloop()
