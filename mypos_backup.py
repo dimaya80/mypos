@@ -290,7 +290,12 @@ def show_login_window():
     root.bind('<Return>', lambda e: login())
     root.mainloop()
 
+shift_popup_open = False
+
 def check_or_start_shift(user_id):
+    global shift_popup_open
+    if shift_popup_open:
+        return
     try:
         resp = requests.get(f"{API_URL}?action=check_shift&user_id={user_id}", timeout=5)
         data = resp.json()
@@ -298,7 +303,11 @@ def check_or_start_shift(user_id):
             open_cashier_dashboard(user_id)
         else:
             def start_shift_popup():
-                win = tk.Toplevel()   # BUKAN tk.Tk()
+                global shift_popup_open
+                if shift_popup_open:
+                    return
+                shift_popup_open = True
+                win = tk.Toplevel()
                 win.title("Mula Shift")
                 win.geometry("350x200")
                 tk.Label(win, text="Shift belum bermula!", font=("Arial", 13, "bold")).pack(pady=10)
@@ -318,15 +327,16 @@ def check_or_start_shift(user_id):
                         if data2.get("status") == "success":
                             messagebox.showinfo("Berjaya", "Shift bermula!", parent=win)
                             win.destroy()
+                            shift_popup_open = False
                             open_cashier_dashboard(user_id)
                         else:
                             raise Exception(data2.get("message", "Gagal mula shift!"))
                     except Exception as e:
                         messagebox.showerror("Error", f"Gagal mula shift: {e}", parent=win)
                 tk.Button(win, text="Mula Shift", command=submit_start_shift, bg="#32CD32", fg="white", font=("Arial", 12, "bold")).pack(pady=10)
-                tk.Button(win, text="Batal", command=win.destroy).pack()
-                win.transient()  # modal
-                win.grab_set()   # block parent
+                tk.Button(win, text="Batal", command=lambda: [win.destroy(), setattr(globals(), 'shift_popup_open', False)]).pack()
+                win.transient()
+                win.grab_set()
                 win.wait_window()
             start_shift_popup()
     except Exception as e:
