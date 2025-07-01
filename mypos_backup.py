@@ -28,7 +28,14 @@ def detect_thermal_printer_serial():
 def select_printer_popup(master):
     global SELECTED_PRINTER_PORT, SELECTED_PRINTER_NAME
     ports = list(serial.tools.list_ports.comports())
-    if not ports:
+
+    # Tapis port yang device atau description kosong/None/whitespace
+    filtered_ports = []
+    for p in ports:
+        if p.device and p.description and str(p.device).strip() and str(p.description).strip():
+            filtered_ports.append(p)
+
+    if not filtered_ports:
         messagebox.showwarning("Tiada Printer", "Tiada printer thermal serial dikesan!", parent=master)
         return
 
@@ -37,10 +44,9 @@ def select_printer_popup(master):
     popup.geometry("500x260")
     tk.Label(popup, text="Sila pilih port printer thermal anda:", font=("Arial", 12, "bold")).pack(pady=(16, 8))
 
-    # Buat mapping label <-> (port, name)
     port_display_list = []
     port_map = {}
-    for port in ports:
+    for port in filtered_ports:
         label = f"{port.device} - {port.description}"
         port_display_list.append(label)
         port_map[label] = (port.device, port.description)
@@ -62,7 +68,7 @@ def select_printer_popup(master):
 
     def pilih():
         global SELECTED_PRINTER_PORT, SELECTED_PRINTER_NAME
-        selected_label = port_var.get()   # Ambil dari combobox (bukan index!)
+        selected_label = port_var.get()
         if selected_label and selected_label in port_map:
             SELECTED_PRINTER_PORT, SELECTED_PRINTER_NAME = port_map[selected_label]
             messagebox.showinfo(
@@ -172,7 +178,17 @@ def get_store_info():
             'phone': '-'
         }
 
-def print_receipt(items, total, amount_paid, payment_method, customer_info=None, discount=0, tax=0, receipt_no=None, sale_date=None):
+def print_receipt(
+    items,
+    total,
+    amount_paid,
+    payment_method,
+    customer_info=None,
+    discount=0,
+    tax=0,
+    receipt_no=None,
+    sale_date=None
+):
     try:
         store_info = get_store_info()
         if not receipt_no:
@@ -184,56 +200,76 @@ def print_receipt(items, total, amount_paid, payment_method, customer_info=None,
                 sale_date = datetime.strptime(sale_date, "%Y-%m-%d %H:%M:%S")
             except ValueError:
                 sale_date = datetime.now()
+
+        LEBAR = 48
         receipt_lines = [
-            "\x1B\x40",
-            "\x1B\x21\x20",
-            "\x1B\x61\x01",
+            "\x1B\x40",         # Initialize
+            "\x1B\x21\x20",     # Font B, bold
+            "\x1B\x61\x01",     # Center
             f"{store_info['store_name']}\n",
-            "\x1B\x61\x01",
             f"{store_info['address']}\n",
-            "\x1B\x61\x01",
             f"{store_info['phone']}\n",
-            "\x1B\x21\x00",
-            "\x1B\x61\x00",
-            "===============================================\n",
+            "\x1B\x21\x00",     # Normal font
+            "\x1B\x61\x00",     # Left align
+            "=" * LEBAR + "\n",
             f"Tarikh: {sale_date.strftime('%d/%m/%Y %H:%M:%S')}\n",
             f"No Resit: {receipt_no}\n",
-            "-----------------------------------------------\n",
-            "Perkara               Kuantiti   Harga   Jumlah\n",
-            "-----------------------------------------------\n"
+            "-" * LEBAR + "\n",
+            f"{'Perkara':<20}{'Qty':>6}{'Harga':>10}{'Jumlah':>12}\n",
+            "-" * LEBAR + "\n"
         ]
+
         for item in items:
-            name = item['name'][:15]
+            name = item['name'][:20]
             quantity = float(item['quantity'])
             price = float(item['price'])
             item_total = float(item['total'])
-            price_str = f"{price:.4f}" if price < 0.01 else f"{price:.2f}"
-            qty_str = f"{quantity:.3f}" if quantity < 10 and quantity != int(quantity) else str(int(quantity))
+            qty_str = f"{quantity:.3f}" if quantity != int(quantity) else f"{int(quantity)}"
+            price_str = f"{price:.2f}"
+            total_str = f"{item_total:.2f}"
             receipt_lines.append(
-                f"{name:<26} {qty_str:>5} {price_str:>7} {item_total:>8.2f}\n"
+                f"{name:<20}{qty_str:>6}{price_str:>10}{total_str:>12}\n"
             )
+
         subtotal = sum(float(item['total']) for item in items)
         total_after_discount = subtotal - discount
         grand_total = total_after_discount + tax
         change = amount_paid - grand_total
+
         receipt_lines.extend([
-            "-----------------------------------------------\n",
-            f"Subtotal:{'':>28}{subtotal:>10.2f}\n",
-            f"Diskaun:{'':>29}{discount:>10.2f}\n",
-            f"Cukai:{'':>31}{tax:>10.2f}\n",
-            f"Dibayar:{'':>29}{amount_paid:>10.2f}\n",
-            f"Baki Kembali:{'':>24}{change:>10.2f}\n",
-            f"Total:{'':>31}{grand_total:>10.2f}\n",
-            "===============================================\n",
-            f"Kaedah Pembayaran:{'':>20}{payment_method}\n",
-            "===============================================\n",
+            "-" * LEBAR + "\n",
+            f"{'Subtotal:':<30}{subtotal:>18.2f}\n",
+            f"{'Diskaun:':<30}{discount:>18.2f}\n",
+            f"{'Cukai:':<30}{tax:>18.2f}\n",
+            f"{'Dibayar:':<30}{amount_paid:>18.2f}\n",
+            f"{'Baki Kembali:':<30}{change:>18.2f}\n",
+            f"{'Total:':<30}{grand_total:>18.2f}\n",
+            "=" * LEBAR + "\n",
+            f"Kaedah Pembayaran: {payment_method}\n",
+            "=" * LEBAR + "\n",
             "\x1B\x61\x01",
             "Terima kasih atas kunjungan Anda\n",
             "Barang yang sudah dibeli tidak boleh ditukar\n",
             "\x1B\x61\x00",
-            "===============================================\n",
-            "\n\n\n\x1D\x56\x41\x03"
+            "=" * LEBAR + "\n"
         ])
+
+        # ========== CETAK BARCODE DI BAWAH RESIT ==========
+        barcode_data = receipt_no
+        # Center
+        receipt_lines.append("\x1B\x61\x01")
+        # Set barcode height (80 px)
+        receipt_lines.append("\x1D\x68\x50")
+        # Set barcode width (2)
+        receipt_lines.append("\x1D\x77\x02")
+        # Print CODE128 barcode (ESC/POS)
+        # Format: \x1D\x6B\x49[length][data]
+        receipt_lines.append(f"\x1D\x6B\x49{chr(len(barcode_data))}{barcode_data}\n")
+        # Back to left
+        receipt_lines.append("\x1B\x61\x00")
+        # ========== POTONG KERTAS ==========
+        receipt_lines.append("\n\n\n\x1D\x56\x41\x03")
+
         receipt_text = "".join(receipt_lines)
         port = SELECTED_PRINTER_PORT or detect_thermal_printer_serial()
         if not port:
