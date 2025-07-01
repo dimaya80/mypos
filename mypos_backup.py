@@ -291,56 +291,125 @@ def show_login_window():
     root.mainloop()
 
 shift_popup_open = False
+main_root = None
+
+def show_login_window():
+    global main_root
+    ctk.set_appearance_mode("dark")
+    ctk.set_default_color_theme("blue")
+
+    main_root = ctk.CTk()
+    main_root.title("My POS System - Login")
+    main_root.geometry("400x400")
+
+    frame = ctk.CTkFrame(main_root)
+    frame.pack(pady=50, padx=20, fill="both", expand=True)
+
+    ctk.CTkLabel(frame, text="KAK NAH MINI MARKET", font=("Arial", 20, "bold")).pack(pady=20)
+    ctk.CTkLabel(frame, text="Username:").pack()
+
+    entry_username = ctk.CTkEntry(frame)
+    entry_username.pack()
+    entry_username.focus()
+
+    ctk.CTkLabel(frame, text="Password:").pack()
+    entry_password = ctk.CTkEntry(frame, show="*")
+    entry_password.pack()
+
+    def login():
+        username = entry_username.get().strip()
+        password = entry_password.get().strip()
+        if not username or not password:
+            messagebox.showwarning("Peringatan", "Username dan password wajib diisi!")
+            return
+
+        try:
+            response = requests.post(API_URL, json={
+                "action": "login",
+                "username": username,
+                "password": password
+            }, timeout=5)
+
+            result = response.json()
+            if result.get("status") == "success":
+                user_id = result["user"]["id"]
+                main_root.withdraw()  # SEMBUNYI, bukan destroy
+                check_or_start_shift(user_id)
+            else:
+                messagebox.showerror("Login Gagal", result.get("message", "Login gagal"))
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal login: {str(e)}")
+
+    ctk.CTkButton(frame, text="Login", command=login, fg_color=PRIMARY_COLOR).pack(pady=20)
+    main_root.bind('<Return>', lambda e: login())
+    main_root.mainloop()
 
 def check_or_start_shift(user_id):
     global shift_popup_open
+
     if shift_popup_open:
         return
+
     try:
         resp = requests.get(f"{API_URL}?action=check_shift&user_id={user_id}", timeout=5)
         data = resp.json()
+
         if data.get('status') == 'success' and data.get('has_shift'):
             open_cashier_dashboard(user_id)
         else:
-            def start_shift_popup():
-                global shift_popup_open
-                if shift_popup_open:
-                    return
-                shift_popup_open = True
-                win = tk.Toplevel()
-                win.title("Mula Shift")
-                win.geometry("350x200")
-                tk.Label(win, text="Shift belum bermula!", font=("Arial", 13, "bold")).pack(pady=10)
-                tk.Label(win, text="Masukkan Cash Awal (RM):").pack()
-                entry_cash = tk.Entry(win, font=("Arial", 15), width=15)
-                entry_cash.pack(pady=7)
-                entry_cash.focus()
-                def submit_start_shift():
-                    try:
-                        cash_awal = float(entry_cash.get())
-                        res = requests.post(API_URL, json={
-                            "action": "start_shift",
-                            "user_id": user_id,
-                            "cash_start": cash_awal
-                        }, timeout=10)
-                        data2 = res.json()
-                        if data2.get("status") == "success":
-                            messagebox.showinfo("Berjaya", "Shift bermula!", parent=win)
-                            win.destroy()
-                            shift_popup_open = False
-                            open_cashier_dashboard(user_id)
-                        else:
-                            raise Exception(data2.get("message", "Gagal mula shift!"))
-                    except Exception as e:
-                        messagebox.showerror("Error", f"Gagal mula shift: {e}", parent=win)
-                tk.Button(win, text="Mula Shift", command=submit_start_shift, bg="#32CD32", fg="white", font=("Arial", 12, "bold")).pack(pady=10)
-                tk.Button(win, text="Batal", command=lambda: [win.destroy(), setattr(globals(), 'shift_popup_open', False)]).pack()
-                win.transient()
-                win.grab_set()
-                win.wait_window()
-            start_shift_popup()
+            show_shift_start_modal(user_id)
+
     except Exception as e:
-        messagebox.showerror("Error", f"Gagal semak shift: {str(e)}")
+        messagebox.showerror("Ralat", f"Gagal semak shift: {str(e)}")
+
+def show_shift_start_modal(user_id):
+    global shift_popup_open
+    if shift_popup_open:
+        return
+    shift_popup_open = True
+
+    win = ctk.CTkToplevel(master=main_root)
+    win.title("Mula Shift")
+    win.geometry("350x250")
+    win.attributes('-topmost', True)
+
+    ctk.CTkLabel(win, text="Shift belum bermula!", font=("Arial", 16, "bold")).pack(pady=10)
+    ctk.CTkLabel(win, text="Masukkan Cash Awal (RM):").pack()
+
+    entry_cash = ctk.CTkEntry(win)
+    entry_cash.pack(pady=10)
+    entry_cash.focus()
+
+    def submit_start_shift():
+        try:
+            cash_awal = float(entry_cash.get())
+            res = requests.post(API_URL, json={
+                "action": "start_shift",
+                "user_id": user_id,
+                "cash_start": cash_awal
+            }, timeout=10)
+            data2 = res.json()
+            if data2.get("status") == "success":
+                messagebox.showinfo("Berjaya", "Shift bermula!", parent=win)
+                win.destroy()
+                shift_popup_open = False
+                open_cashier_dashboard(user_id)
+            else:
+                raise Exception(data2.get("message", "Gagal mula shift!"))
+        except Exception as e:
+            messagebox.showerror("Ralat", f"Gagal mula shift: {e}", parent=win)
+
+    ctk.CTkButton(win, text="Mula Shift", command=submit_start_shift, fg_color="#32CD32").pack(pady=10)
+    ctk.CTkButton(win, text="Batal", command=lambda: [win.destroy(), reset_shift_flag()]).pack(pady=5)
+
+    win.transient(main_root)
+    win.grab_set()
+    win.protocol("WM_DELETE_WINDOW", lambda: [win.destroy(), reset_shift_flag()])
+    win.wait_window()
+
+def reset_shift_flag():
+    global shift_popup_open
+    shift_popup_open = False
 
 def open_cashier_dashboard(user_id):
     dashboard = tk.Tk()
