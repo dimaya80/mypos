@@ -1013,6 +1013,41 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data
     $stmt->close();
 }
 
+// START SHIFT - TAMBAHKAN BLOK INI
+elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data['action'] == 'start_shift') {
+    if (!isset($data['user_id']) || !isset($data['cash_start'])) {
+        echo json_encode(['status' => 'error', 'message' => 'user_id dan cash_start diperlukan']);
+        exit;
+    }
+    $user_id = (int)$data['user_id'];
+    $cash_start = (float)$data['cash_start'];
+    $now = date('Y-m-d H:i:s');
+
+    // Pastikan tiada shift aktif
+    $sql = "SELECT id FROM shifts WHERE user_id = ? AND shift_end IS NULL";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("i", $user_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    if ($result->num_rows > 0) {
+        echo json_encode(['status' => 'error', 'message' => 'Shift sudah bermula untuk user ini']);
+        $stmt->close();
+        exit;
+    }
+    $stmt->close();
+
+    // Insert shift baru
+    $sql = "INSERT INTO shifts (user_id, cash_start, cash_end, shift_start) VALUES (?, ?, ?, ?)";
+    $stmt = $conn->prepare($sql);
+    $stmt->bind_param("idds", $user_id, $cash_start, $cash_start, $now);
+    if ($stmt->execute()) {
+        echo json_encode(['status' => 'success', 'message' => 'Shift bermula!']);
+    } else {
+        echo json_encode(['status' => 'error', 'message' => 'Gagal mula shift: ' . $stmt->error]);
+    }
+    $stmt->close();
+}
+
 // GET STORE INFO
 elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] == 'get_store_info') {
     $sql = "SELECT * FROM store_settings LIMIT 1";
