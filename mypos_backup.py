@@ -10,6 +10,7 @@ from datetime import datetime
 API_URL = "http://127.0.0.1/api/api.php"
 PRIMARY_COLOR = "#2B7A78"
 SELECTED_PRINTER_PORT = None
+SELECTED_PRINTER_NAME = None  # TAMBAH: untuk simpan nama printer
 
 def detect_thermal_printer_serial():
     ports = serial.tools.list_ports.comports()
@@ -18,13 +19,14 @@ def detect_thermal_printer_serial():
             with serial.Serial(port.device, baudrate=9600, timeout=1) as ser:
                 ser.write(b"\x1B\x40")
                 time.sleep(0.2)
-                return port.device
+                # TAMBAH return tuple (device, description)
+                return port.device, port.description
         except Exception:
             continue
-    return None
+    return None, None
 
 def select_printer_popup(master):
-    global SELECTED_PRINTER_PORT
+    global SELECTED_PRINTER_PORT, SELECTED_PRINTER_NAME
     ports = list(serial.tools.list_ports.comports())
     if not ports:
         messagebox.showwarning("Tiada Printer", "Tiada printer thermal serial dikesan!", parent=master)
@@ -35,38 +37,56 @@ def select_printer_popup(master):
     popup.geometry("500x260")
     tk.Label(popup, text="Sila pilih port printer thermal anda:", font=("Arial", 12, "bold")).pack(pady=(16, 8))
 
+    # Buat mapping label <-> (port, name)
     port_display_list = []
     port_map = {}
     for port in ports:
         label = f"{port.device} - {port.description}"
         port_display_list.append(label)
-        port_map[label] = port.device
+        port_map[label] = (port.device, port.description)
 
-    current_display = None
-    for label, dev in port_map.items():
-        if dev == SELECTED_PRINTER_PORT:
-            current_display = label
-            break
-    if current_display is None:
-        current_display = port_display_list[0]
+    # Pilihan sedia ada (default)
+    current_display = port_display_list[0]
+    if SELECTED_PRINTER_PORT:
+        for label, (dev, desc) in port_map.items():
+            if dev == SELECTED_PRINTER_PORT:
+                current_display = label
+                break
 
     port_var = tk.StringVar(value=current_display)
-    cmb = ttk.Combobox(popup, textvariable=port_var, values=port_display_list, font=("Arial", 13), state="readonly", width=50)
+    cmb = ttk.Combobox(
+        popup, textvariable=port_var, values=port_display_list,
+        font=("Arial", 13), state="readonly", width=50
+    )
     cmb.pack(pady=(0, 18))
 
     def pilih():
-        global SELECTED_PRINTER_PORT
-        selected_label = port_var.get()
-        if selected_label:
-            SELECTED_PRINTER_PORT = port_map[selected_label]
-            messagebox.showinfo("Printer Dipilih", f"Printer thermal disetkan ke port: {SELECTED_PRINTER_PORT}", parent=popup)
+        global SELECTED_PRINTER_PORT, SELECTED_PRINTER_NAME
+        selected_label = port_var.get()   # Ambil dari combobox (bukan index!)
+        if selected_label and selected_label in port_map:
+            SELECTED_PRINTER_PORT, SELECTED_PRINTER_NAME = port_map[selected_label]
+            messagebox.showinfo(
+                "Printer Dipilih",
+                f"Printer: {SELECTED_PRINTER_NAME}\nPort: {SELECTED_PRINTER_PORT}",
+                parent=popup
+            )
         popup.destroy()
 
-    tk.Button(popup, text="Pilih", command=pilih, width=10, bg="#32CD32", fg="white", font=("Arial", 12, "bold")).pack()
+    tk.Button(
+        popup, text="Pilih", command=pilih,
+        width=10, bg="#32CD32", fg="white", font=("Arial", 12, "bold")
+    ).pack()
     popup.transient(master)
     popup.grab_set()
     popup.wait_window()
 
+# CONTOH: Untuk paparan status di UI utama
+def get_selected_printer_status():
+    if SELECTED_PRINTER_PORT and SELECTED_PRINTER_NAME:
+        return f"Printer: {SELECTED_PRINTER_NAME} ({SELECTED_PRINTER_PORT})"
+    else:
+        return "Printer belum dipilih"
+    
 class CTkVirtualKeyboard(ctk.CTkToplevel):
     last_target_entry = None
 
@@ -434,6 +454,38 @@ def open_cashier_dashboard(user_id):
     # PATCH: Simpan baki cash_end supaya boleh autofill form tutup shift
     shift_cash_end = [0.00]
 
+    def confirm_logout(dashboard, user_id):
+        def on_keluar_tanpa_shift():
+            result = messagebox.askyesno(
+                "Keluar Tanpa Tutup Shift",
+                "Anda pasti mahu keluar tanpa tutup shift?\nShift masih aktif.",
+                parent=dashboard
+            )
+            if result:
+                dashboard.destroy()
+                show_login_window()
+
+        def on_tutup_shift():
+            # Guna modal tutup shift yang sedia ada:
+            tutup_shift()
+
+        def on_batal():
+            confirm_win.destroy()
+
+        confirm_win = tk.Toplevel(dashboard)
+        confirm_win.title("Keluar Sistem")
+        confirm_win.geometry("360x180")
+        tk.Label(confirm_win, text="Anda mahu keluar tanpa tutup shift?", font=("Arial", 13, "bold")).pack(pady=10)
+        btn1 = tk.Button(confirm_win, text="Keluar tanpa tutup shift", command=lambda: [confirm_win.destroy(), on_keluar_tanpa_shift()], width=28, bg="#f1c40f")
+        btn1.pack(pady=6)
+        btn2 = tk.Button(confirm_win, text="Tutup shift & keluar", command=lambda: [confirm_win.destroy(), on_tutup_shift()], width=28, bg="#27ae60", fg="white")
+        btn2.pack(pady=6)
+        btn3 = tk.Button(confirm_win, text="Tak Jadi", command=on_batal, width=28)
+        btn3.pack(pady=6)
+        confirm_win.transient(dashboard)
+        confirm_win.grab_set()
+        confirm_win.wait_window()
+
     def update_shift_info():
         try:
             resp = requests.get(f"{API_URL}?action=check_shift&user_id={user_id}", timeout=5)
@@ -652,10 +704,14 @@ def open_cashier_dashboard(user_id):
         font=("Arial", 17, "bold"), command=open_cash_drawer
     )
     btn_laci.grid(row=2, column=0, padx=2, pady=5, sticky="ew")
+
+    # Kemudian tukar kod butang keluar:
     btn_keluar = ctk.CTkButton(
         button_grid, text="Keluar", fg_color="#B22222", text_color="white",
-        font=("Arial", 16, "bold"), command=lambda: logout_and_return(dashboard)
+        font=("Arial", 16, "bold"),
+        command=lambda: confirm_logout(dashboard, user_id)
     )
+    btn_keluar.grid(row=2, column=1, padx=2, pady=5, sticky="ew")
     btn_keluar.grid(row=2, column=1, padx=2, pady=5, sticky="ew")
     button_grid.columnconfigure(0, weight=1)
     button_grid.columnconfigure(1, weight=1)
