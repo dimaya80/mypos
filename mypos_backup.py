@@ -261,8 +261,8 @@ def show_login_window():
             result = response.json()
             if result.get("status") == "success":
                 user_id = result["user"]["id"]
-                root.destroy()
-                open_cashier_dashboard(user_id)
+                root.destroy()  # Tutup login window
+                check_or_start_shift(user_id)
             else:
                 messagebox.showerror("Error", result.get("message", "Login gagal"))
         except Exception as e:
@@ -289,7 +289,49 @@ def show_login_window():
     entry_username.focus()
     root.bind('<Return>', lambda e: login())
     root.mainloop()
-        
+
+def check_or_start_shift(user_id):
+    try:
+        resp = requests.get(f"{API_URL}?action=check_shift&user_id={user_id}", timeout=5)
+        data = resp.json()
+        if data.get('status') == 'success' and data.get('has_shift'):
+            open_cashier_dashboard(user_id)
+        else:
+            def start_shift_popup():
+                win = tk.Toplevel()   # BUKAN tk.Tk()
+                win.title("Mula Shift")
+                win.geometry("350x200")
+                tk.Label(win, text="Shift belum bermula!", font=("Arial", 13, "bold")).pack(pady=10)
+                tk.Label(win, text="Masukkan Cash Awal (RM):").pack()
+                entry_cash = tk.Entry(win, font=("Arial", 15), width=15)
+                entry_cash.pack(pady=7)
+                entry_cash.focus()
+                def submit_start_shift():
+                    try:
+                        cash_awal = float(entry_cash.get())
+                        res = requests.post(API_URL, json={
+                            "action": "start_shift",
+                            "user_id": user_id,
+                            "cash_start": cash_awal
+                        }, timeout=10)
+                        data2 = res.json()
+                        if data2.get("status") == "success":
+                            messagebox.showinfo("Berjaya", "Shift bermula!", parent=win)
+                            win.destroy()
+                            open_cashier_dashboard(user_id)
+                        else:
+                            raise Exception(data2.get("message", "Gagal mula shift!"))
+                    except Exception as e:
+                        messagebox.showerror("Error", f"Gagal mula shift: {e}", parent=win)
+                tk.Button(win, text="Mula Shift", command=submit_start_shift, bg="#32CD32", fg="white", font=("Arial", 12, "bold")).pack(pady=10)
+                tk.Button(win, text="Batal", command=win.destroy).pack()
+                win.transient()  # modal
+                win.grab_set()   # block parent
+                win.wait_window()
+            start_shift_popup()
+    except Exception as e:
+        messagebox.showerror("Error", f"Gagal semak shift: {str(e)}")
+
 def open_cashier_dashboard(user_id):
     dashboard = tk.Tk()
     dashboard.title("Sistem Kasir")
@@ -309,6 +351,10 @@ def open_cashier_dashboard(user_id):
         font=("Arial", 15, "bold"), text_color="#e6e6e6"
     )
     label_shift_info.pack(side="right", padx=20)
+
+    # PATCH: Simpan baki cash_end supaya boleh autofill form tutup shift
+    shift_cash_end = [0.00]
+
     def update_shift_info():
         try:
             resp = requests.get(f"{API_URL}?action=check_shift&user_id={user_id}", timeout=5)
@@ -319,6 +365,7 @@ def open_cashier_dashboard(user_id):
                 shift_start = shift.get('shift_start', '-') if shift.get('shift_start') else '-'
                 cash_start = float(shift.get('cash_start', 0))
                 cash_end = float(shift.get('cash_end', 0))
+                shift_cash_end[0] = cash_end  # PATCH: simpan baki cash_end untuk autofill tutup shift
                 info = (
                     f"Shift: {shift_start} | "
                     f"Cashier: {cashier} | "
@@ -326,6 +373,7 @@ def open_cashier_dashboard(user_id):
                     f"Baki Cash: RM {cash_end:.2f}"
                 )
             else:
+                shift_cash_end[0] = 0.00  # PATCH: reset jika tiada shift
                 info = "Shift: - | Cashier: - | Cash Awal: RM 0.00 | Baki Cash: RM 0.00"
             label_shift_info.configure(text=info)
         except Exception as e:
@@ -459,6 +507,8 @@ def open_cashier_dashboard(user_id):
         tk.Label(win, text="Baki Tunai Akhir (RM):").pack()
         entry_baki = tk.Entry(win, font=("Arial", 15), width=15)
         entry_baki.pack(pady=7)
+        # PATCH: Auto isi baki cash_end dari info shift
+        entry_baki.insert(0, f"{shift_cash_end[0]:.2f}")
         entry_baki.focus()
         def submit_tutup():
             try:
