@@ -306,48 +306,127 @@ def open_cash_drawer():
     except Exception as e:
         messagebox.showerror("Error", f"Gagal membuka laci wang: {e}")
 
-def show_login_window():
-    def login():
-        username = entry_username.get().strip()
-        password = entry_password.get().strip()
-        if not username or not password:
-            messagebox.showwarning("Peringatan", "Username dan password wajib diisi!")
-            return
-        try:
-            response = requests.post(API_URL, json={
-                "action": "login", "username": username, "password": password
-            }, timeout=5)
-            result = response.json()
-            if result.get("status") == "success":
-                user_id = result["user"]["id"]
-                root.destroy()
-                open_cashier_dashboard(user_id)
-            else:
-                messagebox.showerror("Error", result.get("message", "Login gagal"))
-        except Exception as e:
-            messagebox.showerror("Error", f"Gagal login: {str(e)}")
+shift_popup_open = False
+main_root = None
 
+def show_login_window():
     root = tk.Tk()
     root.title("My POS System - Login")
     root.geometry("400x400")
+    root.resizable(False, False)
+
     ctk.set_appearance_mode("dark")
     ctk.set_default_color_theme("blue")
 
     frame = ctk.CTkFrame(root)
     frame.pack(pady=50, padx=20, fill="both", expand=True)
+
     ctk.CTkLabel(frame, text="KAK NAH MINI MARKET", font=("Arial", 20, "bold")).pack(pady=20)
     ctk.CTkLabel(frame, text="Username:").pack()
+
     entry_username = ctk.CTkEntry(frame)
     entry_username.pack()
-    entry_username.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_username))
+    entry_username.focus()
+
     ctk.CTkLabel(frame, text="Password:").pack()
     entry_password = ctk.CTkEntry(frame, show="*")
     entry_password.pack()
-    entry_password.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_password))
+
+    def login():
+        username = entry_username.get().strip()
+        password = entry_password.get().strip()
+        if not username or not password:
+            messagebox.showwarning("Peringatan", "Username dan password wajib diisi!", parent=root)
+            return
+
+        try:
+            response = requests.post(API_URL, json={
+                "action": "login",
+                "username": username,
+                "password": password
+            }, timeout=5)
+
+            result = response.json()
+            if result.get("status") == "success":
+                user_id = result["user"]["id"]
+                root.withdraw()  # SEMBUNYIKAN window login
+                check_or_start_shift(user_id, root)
+            else:
+                messagebox.showerror("Login Gagal", result.get("message", "Login gagal"), parent=root)
+        except Exception as e:
+            messagebox.showerror("Error", f"Gagal login: {str(e)}", parent=root)
+
     ctk.CTkButton(frame, text="Login", command=login, fg_color=PRIMARY_COLOR).pack(pady=20)
-    entry_username.focus()
     root.bind('<Return>', lambda e: login())
     root.mainloop()
+
+def check_or_start_shift(user_id, root_window):
+    global shift_popup_open
+    if shift_popup_open:
+        return
+
+    try:
+        resp = requests.get(f"{API_URL}?action=check_shift&user_id={user_id}", timeout=5)
+        data = resp.json()
+        if data.get('status') == 'success' and data.get('has_shift'):
+            # Terus ke dashboard
+            root_window.destroy()
+            open_cashier_dashboard(user_id)
+        else:
+            show_shift_start_modal(user_id, root_window)
+    except Exception as e:
+        messagebox.showerror("Ralat", f"Gagal semak shift: {str(e)}", parent=root_window)
+
+def show_shift_start_modal(user_id, root_window):
+    global shift_popup_open
+    if shift_popup_open:
+        return
+    shift_popup_open = True
+
+    win = ctk.CTkToplevel(master=root_window)
+    win.title("Mula Shift")
+    win.geometry("350x250")
+    win.attributes('-topmost', True)
+
+    ctk.CTkLabel(win, text="Shift belum bermula!", font=("Arial", 16, "bold")).pack(pady=10)
+    ctk.CTkLabel(win, text="Masukkan Cash Awal (RM):").pack()
+
+    entry_cash = ctk.CTkEntry(win)
+    entry_cash.pack(pady=10)
+    entry_cash.focus()
+
+    def submit_start_shift():
+        try:
+            cash_awal = float(entry_cash.get())
+            res = requests.post(API_URL, json={
+                "action": "start_shift",
+                "user_id": user_id,
+                "cash_start": cash_awal
+            }, timeout=10)
+            data2 = res.json()
+            if data2.get("status") == "success":
+                messagebox.showinfo("Berjaya", "Shift bermula!", parent=win)
+                win.destroy()
+                root_window.destroy()
+                global shift_popup_open
+                shift_popup_open = False
+                open_cashier_dashboard(user_id)
+            else:
+                raise Exception(data2.get("message", "Gagal mula shift!"))
+        except Exception as e:
+            messagebox.showerror("Ralat", f"Gagal mula shift: {e}", parent=win)
+
+    def reset_shift_flag():
+        global shift_popup_open
+        shift_popup_open = False
+
+    ctk.CTkButton(win, text="Mula Shift", command=submit_start_shift, fg_color="#32CD32").pack(pady=10)
+    ctk.CTkButton(win, text="Batal", command=lambda: [win.destroy(), reset_shift_flag()]).pack(pady=5)
+
+    win.transient(root_window)
+    win.grab_set()
+    win.protocol("WM_DELETE_WINDOW", lambda: [win.destroy(), reset_shift_flag()])
+    win.wait_window()
 
 def open_cashier_dashboard(user_id):
     dashboard = tk.Tk()
@@ -583,13 +662,42 @@ def open_cashier_dashboard(user_id):
     )
     btn_laci.grid(row=2, column=0, padx=2, pady=5, sticky="ew")
 
+    def confirm_logout(dashboard, user_id):
+        def on_keluar_tanpa_shift():
+            result = messagebox.askyesno(
+                "Keluar Tanpa Tutup Shift",
+                "Anda pasti mahu keluar tanpa tutup shift?\nShift masih aktif.",
+                parent=dashboard
+            )
+            if result:
+                dashboard.destroy()
+                show_login_window()
+
+        def on_tutup_shift():
+            tutup_shift()  # Pastikan fungsi tutup_shift memang wujud dalam dashboard
+
+        def on_batal():
+            confirm_win.destroy()
+
+        confirm_win = tk.Toplevel(dashboard)
+        confirm_win.title("Keluar Sistem")
+        confirm_win.geometry("360x180")
+        tk.Label(confirm_win, text="Anda mahu keluar tanpa tutup shift?", font=("Arial", 13, "bold")).pack(pady=10)
+        btn1 = tk.Button(confirm_win, text="Keluar tanpa tutup shift", command=lambda: [confirm_win.destroy(), on_keluar_tanpa_shift()], width=28, bg="#f1c40f")
+        btn1.pack(pady=6)
+        btn2 = tk.Button(confirm_win, text="Tutup shift & keluar", command=lambda: [confirm_win.destroy(), on_tutup_shift()], width=28, bg="#27ae60", fg="white")
+        btn2.pack(pady=6)
+        btn3 = tk.Button(confirm_win, text="Tak Jadi", command=on_batal, width=28)
+        btn3.pack(pady=6)
+        confirm_win.transient(dashboard)
+        confirm_win.grab_set()
+        confirm_win.wait_window()
     # Kemudian tukar kod butang keluar:
     btn_keluar = ctk.CTkButton(
         button_grid, text="Keluar", fg_color="#B22222", text_color="white",
         font=("Arial", 16, "bold"),
         command=lambda: confirm_logout(dashboard, user_id)
     )
-    btn_keluar.grid(row=2, column=1, padx=2, pady=5, sticky="ew")
     btn_keluar.grid(row=2, column=1, padx=2, pady=5, sticky="ew")
     button_grid.columnconfigure(0, weight=1)
     button_grid.columnconfigure(1, weight=1)
