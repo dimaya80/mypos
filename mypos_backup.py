@@ -434,6 +434,10 @@ def open_cashier_dashboard(user_id):
     dashboard.geometry("1600x900")
     dashboard.attributes("-fullscreen", True)
 
+    # --- Flag untuk popup carian produk ---
+    global search_popup_open
+    search_popup_open = False
+
     # HEADER BAR ATAS
     header_frame = ctk.CTkFrame(dashboard, height=54, fg_color="#205065")
     header_frame.pack(fill="x", side="top")
@@ -468,7 +472,7 @@ def open_cashier_dashboard(user_id):
             label_shift_info.configure(text=info)
         except Exception as e:
             label_shift_info.configure(text="Shift Info: Tidak dapat hubung API")
-        dashboard.after(10000, update_shift_info)  # auto refresh setiap 10 saat
+        dashboard.after(10000, update_shift_info)
     update_shift_info()
 
     print_receipt_var = tk.BooleanVar(value=True)
@@ -491,6 +495,19 @@ def open_cashier_dashboard(user_id):
     entry_barcode.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_barcode))
     ctk.CTkCheckBox(scan_frame, text="Cetak Resit", variable=print_receipt_var, checkbox_height=22, checkbox_width=22, font=("Arial", 14, "bold")).pack(side="left", padx=(8, 6))
     ctk.CTkCheckBox(scan_frame, text="Buka Laci", variable=open_drawer_var, checkbox_height=22, checkbox_width=22, font=("Arial", 14, "bold")).pack(side="left", padx=(6, 4))
+
+    # PATCH: sentiasa fokus entry barcode KECUALI jika popup search produk/kemaskini kuantiti/entry lain aktif
+    def keep_focus_barcode():
+        focus_widget = dashboard.focus_get()
+        allowed_entries = {entry_barcode, entry_discount, entry_tax, entry_amount_paid}
+        if not search_popup_open and not update_qty_popup_open and (focus_widget not in allowed_entries):
+            try:
+                entry_barcode.focus_set()
+            except Exception:
+                pass
+        dashboard.after(1500, keep_focus_barcode)
+    # keep_focus_barcode() akan dipanggil selepas SEMUA entry sudah didefinisi di bawah
+    keep_focus_barcode()
 
     notebook = ttk.Notebook(left)
     notebook.pack(fill="both", expand=True)
@@ -891,6 +908,10 @@ def open_cashier_dashboard(user_id):
         update_totals()
 
     def open_search_product():
+        global search_popup_open
+        if search_popup_open:
+            return
+        search_popup_open = True
         win = tk.Toplevel(dashboard)
         win.title("Cari Produk")
         win.geometry("700x500")
@@ -927,6 +948,12 @@ def open_cashier_dashboard(user_id):
                     ))
             except Exception as e:
                 messagebox.showerror("Error", str(e), parent=win)
+        def close_popup():
+            global search_popup_open
+            search_popup_open = False
+            win.destroy()
+            entry_barcode.focus_set()
+            
         def add_selected_product():
             selected = results_tree.focus()
             if not selected:
@@ -985,9 +1012,11 @@ def open_cashier_dashboard(user_id):
             item_counter[0] += 1
             update_totals()
             win.destroy()
+            close_popup()
         search_var.trace_add("write", do_search)
         search_entry.bind("<Return>", do_search)
         results_tree.bind("<Double-1>", lambda e: add_selected_product())
+        win.protocol("WM_DELETE_WINDOW", close_popup)
 
     # PATCH: update_quantity_modal untuk support timbang
     def update_quantity_modal(item_id, tree):
