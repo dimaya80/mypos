@@ -7,91 +7,57 @@ import serial.tools.list_ports
 import time
 from datetime import datetime
 
+# === PATCH: Printer Support (USB/Serial) ===
+try:
+    import win32print
+except ImportError:
+    win32print = None
+
 API_URL = "http://127.0.0.1/api/api.php"
 PRIMARY_COLOR = "#2B7A78"
-SELECTED_PRINTER_PORT = None
-SELECTED_PRINTER_NAME = None  # TAMBAH: untuk simpan nama printer
 
-def detect_thermal_printer_serial():
-    ports = serial.tools.list_ports.comports()
-    for port in ports:
-        try:
-            with serial.Serial(port.device, baudrate=9600, timeout=1) as ser:
-                ser.write(b"\x1B\x40")
-                time.sleep(0.2)
-                # TAMBAH return tuple (device, description)
-                return port.device, port.description
-        except Exception:
-            continue
-    return None, None
-
-def select_printer_popup(master):
-    global SELECTED_PRINTER_PORT, SELECTED_PRINTER_NAME
-    ports = list(serial.tools.list_ports.comports())
-
-    # Tapis port yang device atau description kosong/None/whitespace
-    filtered_ports = []
-    for p in ports:
-        if p.device and p.description and str(p.device).strip() and str(p.description).strip():
-            filtered_ports.append(p)
-
-    if not filtered_ports:
-        messagebox.showwarning("Tiada Printer", "Tiada printer thermal serial dikesan!", parent=master)
+def print_usb_receipt(receipt_text, printer_name=None):
+    if not win32print:
+        messagebox.showerror("Printer Error", "pywin32 tidak dipasang. Tidak boleh print ke printer USB/Windows.")
         return
+    if not printer_name:
+        printer_name = win32print.GetDefaultPrinter()
+    hprinter = win32print.OpenPrinter(printer_name)
+    try:
+        hjob = win32print.StartDocPrinter(hprinter, 1, ("MyPOS Receipt", None, "RAW"))
+        win32print.StartPagePrinter(hprinter)
+        win32print.WritePrinter(hprinter, receipt_text.encode('utf-8'))
+        win32print.EndPagePrinter(hprinter)
+        win32print.EndDocPrinter(hprinter)
+    finally:
+        win32print.ClosePrinter(hprinter)
 
-    popup = tk.Toplevel(master)
-    popup.title("Pilih Port Printer")
-    popup.geometry("500x260")
-    tk.Label(popup, text="Sila pilih port printer thermal anda:", font=("Arial", 12, "bold")).pack(pady=(16, 8))
-
-    port_display_list = []
-    port_map = {}
-    for port in filtered_ports:
-        label = f"{port.device} - {port.description}"
-        port_display_list.append(label)
-        port_map[label] = (port.device, port.description)
-
-    # Pilihan sedia ada (default)
-    current_display = port_display_list[0]
-    if SELECTED_PRINTER_PORT:
-        for label, (dev, desc) in port_map.items():
-            if dev == SELECTED_PRINTER_PORT:
-                current_display = label
-                break
-
-    port_var = tk.StringVar(value=current_display)
-    cmb = ttk.Combobox(
-        popup, textvariable=port_var, values=port_display_list,
-        font=("Arial", 13), state="readonly", width=50
-    )
-    cmb.pack(pady=(0, 18))
-
-    def pilih():
-        global SELECTED_PRINTER_PORT, SELECTED_PRINTER_NAME
-        selected_label = port_var.get()
-        if selected_label and selected_label in port_map:
-            SELECTED_PRINTER_PORT, SELECTED_PRINTER_NAME = port_map[selected_label]
-            messagebox.showinfo(
-                "Printer Dipilih",
-                f"Printer: {SELECTED_PRINTER_NAME}\nPort: {SELECTED_PRINTER_PORT}",
-                parent=popup
-            )
-        popup.destroy()
-
-    tk.Button(
-        popup, text="Pilih", command=pilih,
-        width=10, bg="#32CD32", fg="white", font=("Arial", 12, "bold")
-    ).pack()
-    popup.transient(master)
-    popup.grab_set()
-    popup.wait_window()
-
-# CONTOH: Untuk paparan status di UI utama
-def get_selected_printer_status():
-    if SELECTED_PRINTER_PORT and SELECTED_PRINTER_NAME:
-        return f"Printer: {SELECTED_PRINTER_NAME} ({SELECTED_PRINTER_PORT})"
-    else:
-        return "Printer belum dipilih"
+def select_windows_printer(master):
+    if not win32print:
+        messagebox.showerror("Printer Error", "pywin32 tidak dipasang.")
+        return None
+    printers = [p[2] for p in win32print.EnumPrinters(win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS)]
+    if not printers:
+        messagebox.showwarning("Tiada Printer", "Tiada printer Windows dikesan!", parent=master)
+        return None
+    # Simple popup select printer (basic)
+    win = tk.Toplevel(master)
+    win.title("Pilih Printer")
+    win.geometry("350x160")
+    tk.Label(win, text="Pilih printer Windows:", font=("Arial", 12)).pack(pady=10)
+    printer_var = tk.StringVar(value=printers[0])
+    listbox = tk.Listbox(win, listvariable=tk.StringVar(value=printers), height=6)
+    listbox.pack(padx=8)
+    def on_ok():
+        sel = listbox.curselection()
+        if sel:
+            printer_var.set(printers[sel[0]])
+        win.destroy()
+    tk.Button(win, text="OK", command=on_ok, width=12, bg="#32CD32", fg="white").pack(pady=8)
+    win.transient(master)
+    win.grab_set()
+    win.wait_window()
+    return printer_var.get()
 
 # ========== VIRTUAL KEYBOARD CTK ==========
 class CTkVirtualKeyboard(ctk.CTkToplevel):
@@ -105,30 +71,100 @@ class CTkVirtualKeyboard(ctk.CTkToplevel):
         self.attributes('-topmost', True)
         self.protocol("WM_DELETE_WINDOW", self.destroy)
 
-        keys = [
-            ['1','2','3','4','5','6','7','8','9','0','Back'],
+        # QWERTY rows (kiri)
+        qwerty_rows = [
             ['Q','W','E','R','T','Y','U','I','O','P'],
             ['A','S','D','F','G','H','J','K','L'],
-            ['Z','X','C','V','B','N','M'],
-            ['Space']
+            ['Z','X','C','V','B','N','M']
         ]
-        for r, row in enumerate(keys):
-            for c, key in enumerate(row):
-                if key == 'Space':
-                    btn = ctk.CTkButton(
-                        self, text='Space', width=340, height=40, fg_color="#393e46",
-                        text_color="#eeeeee", font=("Arial", 18, "bold"),
-                        command=lambda k=' ': self.press(k)
-                    )
-                    btn.grid(row=r, column=c, columnspan=7, sticky='ew', padx=2, pady=2)
-                else:
-                    btn = ctk.CTkButton(
-                        self, text=key, width=60, height=40, fg_color="#393e46",
-                        text_color="#00adb5" if key == "Back" else "#eeeeee",
-                        font=("Arial", 18, "bold"),
-                        command=lambda k=key: self.press(k)
-                    )
-                    btn.grid(row=r, column=c, padx=2, pady=2)
+        # Numpad (kanan)
+        numpad_keys = [
+            ['1','2','3'],
+            ['4','5','6'],
+            ['7','8','9']
+        ]
+
+        # Lukis QWERTY dan numpad
+        for r in range(3):
+            # QWERTY kiri
+            for c, key in enumerate(qwerty_rows[r]):
+                btn = ctk.CTkButton(
+                    self, text=key, width=50, height=50, fg_color="#393e46",
+                    text_color="#eeeeee", font=("Arial", 18, "bold"),
+                    command=lambda k=key: self.press(k)
+                )
+                btn.grid(row=r, column=c, padx=2, pady=2)
+            # Numpad kanan (offset kanan, grid dari col 12)
+            col_offset = 12
+            for nc, nkey in enumerate(numpad_keys[r]):
+                btn = ctk.CTkButton(
+                    self, text=nkey, width=50, height=50, fg_color="#393e46",
+                    text_color="#eeeeee", font=("Arial", 18, "bold"),
+                    command=lambda k=nkey: self.press(k)
+                )
+                btn.grid(row=r, column=col_offset+nc, padx=2, pady=2)
+
+        # Baris bawah (special keys)
+        r = 3
+        # Space (span 3)
+        btn_space = ctk.CTkButton(
+            self, text='Space', width=170, height=50, fg_color="#393e46",
+            text_color="#eeeeee", font=("Arial", 18, "bold"),
+            command=lambda k=' ': self.press(k)
+        )
+        btn_space.grid(row=r, column=0, columnspan=3, padx=2, pady=2, sticky='ew')
+
+        # Enter (span 2)
+        btn_enter = ctk.CTkButton(
+            self, text='Enter', width=110, height=50, fg_color="#00adb5",
+            text_color="#eeeeee", font=("Arial", 18, "bold"),
+            command=self.press_enter
+        )
+        btn_enter.grid(row=r, column=3, columnspan=2, padx=2, pady=2, sticky='ew')
+
+        # Kosongkan tengah (col 5-10)
+        # 0
+        btn_0 = ctk.CTkButton(
+            self, text='0', width=50, height=50, fg_color="#393e46",
+            text_color="#eeeeee", font=("Arial", 18, "bold"),
+            command=lambda k='0': self.press(k)
+        )
+        btn_0.grid(row=r, column=12, padx=2, pady=2)
+        # .
+        btn_dot = ctk.CTkButton(
+            self, text='.', width=50, height=50, fg_color="#222831",
+            text_color="#FFD700", font=("Arial", 18, "bold"),
+            command=lambda k='.': self.special_press('.')
+        )
+        btn_dot.grid(row=r, column=13, padx=2, pady=2)
+        # Back
+        btn_back = ctk.CTkButton(
+            self, text='Back', width=50, height=50, fg_color="#393e46",
+            text_color="#00adb5", font=("Arial", 18, "bold"),
+            command=lambda k='Back': self.press(k)
+        )
+        btn_back.grid(row=r, column=14, padx=2, pady=2)
+        # F1
+        btn_f1 = ctk.CTkButton(
+            self, text='F1', width=50, height=50, fg_color="#222831",
+            text_color="#00adb5", font=("Arial", 18, "bold"),
+            command=lambda k='F1': self.special_press('F1')
+        )
+        btn_f1.grid(row=r, column=15, padx=2, pady=2)
+        # F2
+        btn_f2 = ctk.CTkButton(
+            self, text='F2', width=50, height=50, fg_color="#222831",
+            text_color="#00adb5", font=("Arial", 18, "bold"),
+            command=lambda k='F2': self.special_press('F2')
+        )
+        btn_f2.grid(row=r, column=16, padx=2, pady=2)
+        # F5
+        btn_f5 = ctk.CTkButton(
+            self, text='F5', width=50, height=50, fg_color="#222831",
+            text_color="#00adb5", font=("Arial", 18, "bold"),
+            command=lambda k='F5': self.special_press('F5')
+        )
+        btn_f5.grid(row=r, column=17, padx=2, pady=2)
 
     @classmethod
     def set_target_entry(cls, entry):
@@ -142,14 +178,35 @@ class CTkVirtualKeyboard(ctk.CTkToplevel):
             try:
                 current = entry.get()
                 if len(current) > 0:
-                    entry.delete(len(current)-1, tk.END)
+                    entry.delete(len(current)-1, 'end')
             except Exception:
                 pass
         else:
             try:
-                entry.insert(tk.END, key)
+                entry.insert('end', key)
             except Exception:
                 pass
+
+    def special_press(self, key):
+        entry = CTkVirtualKeyboard.last_target_entry
+        if not entry:
+            return
+        if key == '.':
+            try:
+                entry.insert('end', '.')
+            except Exception:
+                pass
+        elif key in ('F1', 'F2', 'F5'):
+            entry.event_generate(f'<KeyPress-{key}>')
+
+    def press_enter(self):
+        entry = CTkVirtualKeyboard.last_target_entry
+        if not entry:
+            return
+        try:
+            entry.event_generate('<Return>')
+        except Exception:
+            pass
 
 # ========== FUNGSI AMBIL MAKLUMAT KEDAI DARI API ==========
 def get_store_info():
@@ -181,6 +238,7 @@ def get_store_info():
         }
 
 # ========== PRINT RESIT & BUKA LACI ==========
+import win32api
 def print_receipt(
     items,
     total,
@@ -275,19 +333,39 @@ def print_receipt(
 
         receipt_text = "".join(receipt_lines)
         port = SELECTED_PRINTER_PORT or detect_thermal_printer_serial()
-        if not port:
-            messagebox.showerror("Printer Error", "Thermal printer serial tidak dijumpai! Sila pastikan printer telah disambung dan port telah dipilih.")
-            print(receipt_text)
-            return False
-        try:
-            with serial.Serial(port, baudrate=9600, timeout=1) as printer:
-                printer.write(receipt_text.encode('utf-8'))
-                time.sleep(0.5)
-            return True
-        except Exception as e:
-            messagebox.showerror("Printer Error", f"Gagal mencetak ke printer {port}:\n{str(e)}")
-            print(receipt_text)
-            return False
+        # PATCH: Cuba serial dulu, kalau gagal cuba printer Windows/USB (pywin32)
+        printed = False
+        if port:
+            try:
+                import serial
+                with serial.Serial(port, baudrate=9600, timeout=1) as printer:
+                    printer.write(receipt_text.encode('utf-8'))
+                    time.sleep(0.5)
+                printed = True
+            except Exception as e:
+                messagebox.showerror("Printer Error", f"Gagal mencetak ke printer {port}:\n{str(e)}\nMencuba printer USB/Windows...")
+        if not printed:
+            # Cuba print ke printer Windows/USB
+            try:
+                # Pilih printer Windows (jika mahu popup, boleh enum dulu)
+                printer_name = win32print.GetDefaultPrinter()
+                # Kalau nak popup/ubah printer, boleh guna win32print.EnumPrinters
+                hprinter = win32print.OpenPrinter(printer_name)
+                try:
+                    hjob = win32print.StartDocPrinter(hprinter, 1, ("MyPOS Receipt", None, "RAW"))
+                    win32print.StartPagePrinter(hprinter)
+                    win32print.WritePrinter(hprinter, receipt_text.encode('utf-8'))
+                    win32print.EndPagePrinter(hprinter)
+                    win32print.EndDocPrinter(hprinter)
+                    printed = True
+                    messagebox.showinfo("Printer", f"Resit telah dicetak ke printer Windows: {printer_name}")
+                finally:
+                    win32print.ClosePrinter(hprinter)
+            except Exception as e:
+                messagebox.showerror("Printer Error", f"Thermal printer serial & Windows/USB tidak dijumpai/gagal print:\n{str(e)}")
+                print(receipt_text)
+                return False
+        return printed
     except Exception as e:
         messagebox.showerror("Error", f"Error saat mencetak:\n{str(e)}")
         return False
@@ -437,6 +515,8 @@ def open_cashier_dashboard(user_id):
     # --- Flag untuk popup carian produk ---
     global search_popup_open
     search_popup_open = False
+    global update_qty_popup_open
+    update_qty_popup_open = False
 
     # HEADER BAR ATAS
     header_frame = ctk.CTkFrame(dashboard, height=54, fg_color="#205065")
@@ -495,19 +575,6 @@ def open_cashier_dashboard(user_id):
     entry_barcode.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_barcode))
     ctk.CTkCheckBox(scan_frame, text="Cetak Resit", variable=print_receipt_var, checkbox_height=22, checkbox_width=22, font=("Arial", 14, "bold")).pack(side="left", padx=(8, 6))
     ctk.CTkCheckBox(scan_frame, text="Buka Laci", variable=open_drawer_var, checkbox_height=22, checkbox_width=22, font=("Arial", 14, "bold")).pack(side="left", padx=(6, 4))
-
-    # PATCH: sentiasa fokus entry barcode KECUALI jika popup search produk/kemaskini kuantiti/entry lain aktif
-    def keep_focus_barcode():
-        focus_widget = dashboard.focus_get()
-        allowed_entries = {entry_barcode, entry_discount, entry_tax, entry_amount_paid}
-        if not search_popup_open and not update_qty_popup_open and (focus_widget not in allowed_entries):
-            try:
-                entry_barcode.focus_set()
-            except Exception:
-                pass
-        dashboard.after(1500, keep_focus_barcode)
-    # keep_focus_barcode() akan dipanggil selepas SEMUA entry sudah didefinisi di bawah
-    keep_focus_barcode()
 
     notebook = ttk.Notebook(left)
     notebook.pack(fill="both", expand=True)
@@ -602,7 +669,9 @@ def open_cashier_dashboard(user_id):
     btn_print.pack(side="left", padx=2)
 
     # INVENTORY BUTTON PATCH
-    btn_inventory = tk.Button(sales_btn_frame, text="Inventory", bg="#FF9900", fg="white", font=("Arial", 11, "bold"), command=lambda: messagebox.showinfo("Info", "Fungsi Inventory belum diimplementasi"))
+    from inventory_gui import open_inventory_management
+
+    btn_inventory = tk.Button(sales_btn_frame, text="Inventory", bg="#FF9900", fg="white", font=("Arial", 11, "bold"), command=lambda: open_inventory_management(user_id))
     btn_inventory.pack(side="left", padx=2)
 
     # ====== BUTTON TUTUP SHIFT ======
@@ -709,7 +778,6 @@ def open_cashier_dashboard(user_id):
         confirm_win.transient(dashboard)
         confirm_win.grab_set()
         confirm_win.wait_window()
-    # Kemudian tukar kod butang keluar:
     btn_keluar = ctk.CTkButton(
         button_grid, text="Keluar", fg_color="#B22222", text_color="white",
         font=("Arial", 16, "bold"),
@@ -833,6 +901,13 @@ def open_cashier_dashboard(user_id):
         win.grab_set()
         win.wait_window()
 
+    def highlight_last_cart_item():
+        items = tree_main.get_children()
+        if items:
+            last_item = items[-1]
+            tree_main.selection_set(last_item)
+            tree_main.see(last_item)
+
     def scan_barcode(barcode):
         if not barcode:
             return
@@ -884,6 +959,7 @@ def open_cashier_dashboard(user_id):
                         ))
                         update_totals()
                         entry_barcode.delete(0, tk.END)
+                        highlight_last_cart_item()
                         return
             idx = item_counter[0]
             total = quantity * price_float
@@ -891,6 +967,7 @@ def open_cashier_dashboard(user_id):
             item_counter[0] += 1
             update_totals()
             entry_barcode.delete(0, tk.END)
+            highlight_last_cart_item()
         except Exception as e:
             messagebox.showerror("Error", f"Gagal scan barcode: {str(e)}")
 
@@ -963,7 +1040,6 @@ def open_cashier_dashboard(user_id):
             product_name = vals[0]
             price_str = vals[1].replace("RM", "").strip()
             price = float(price_str)
-            # PATCH: Ambil is_weighable dari products_data
             is_weighable = 0
             for product in products_data:
                 if product.get('name') == product_name:
@@ -1005,6 +1081,7 @@ def open_cashier_dashboard(user_id):
                         tree_main.item(item, values=(v[0], v[1], f"RM {price:.2f}", new_quantity, f"RM {new_total:.2f}"))
                         update_totals()
                         win.destroy()
+                        highlight_last_cart_item()
                         return
             idx = item_counter[0]
             total = price * quantity
@@ -1012,13 +1089,13 @@ def open_cashier_dashboard(user_id):
             item_counter[0] += 1
             update_totals()
             win.destroy()
+            highlight_last_cart_item()
             close_popup()
         search_var.trace_add("write", do_search)
         search_entry.bind("<Return>", do_search)
         results_tree.bind("<Double-1>", lambda e: add_selected_product())
         win.protocol("WM_DELETE_WINDOW", close_popup)
 
-    # PATCH: update_quantity_modal untuk support timbang
     def update_quantity_modal(item_id, tree):
         selected_item = None
         for item in tree.get_children():
@@ -1069,6 +1146,57 @@ def open_cashier_dashboard(user_id):
         tk.Button(modal, text="Simpan", command=submit_quantity, width=12, bg="#32CD32", fg="white").pack(pady=10)
         tk.Button(modal, text="Batal", command=modal.destroy, width=12).pack()
         modal.bind('<Return>', lambda e: submit_quantity())
+
+    def update_quantity_popup():
+        global update_qty_popup_open
+        if update_qty_popup_open:
+            return
+        selection = tree_main.selection()
+        if not selection:
+            messagebox.showwarning("Peringatan", "Tiada item dipilih untuk dikemaskini!")
+            return
+        item_id = selection[0]
+        current_values = tree_main.item(item_id, 'values')
+        product_name = current_values[1]
+        current_quantity = current_values[3]
+        modal = tk.Toplevel(dashboard)
+        modal.title(f"Kemaskini Kuantiti: {product_name}")
+        modal.geometry("320x160")
+        update_qty_popup_open = True
+        def on_close():
+            global update_qty_popup_open
+            update_qty_popup_open = False
+            modal.destroy()
+        tk.Label(modal, text=f"Produk: {product_name}", font=("Arial", 13, "bold")).pack(pady=10)
+        tk.Label(modal, text="Kuantiti Baru:", font=("Arial", 13)).pack(pady=5)
+        quantity_entry = tk.Entry(modal, font=("Arial", 14), width=10)
+        quantity_entry.insert(0, str(current_quantity))
+        quantity_entry.pack(pady=5)
+        quantity_entry.focus()
+        def submit_quantity():
+            try:
+                val = quantity_entry.get().strip()
+                new_quantity = float(val) if "." in val else int(val)
+                if new_quantity <= 0:
+                    raise ValueError("Kuantiti mesti lebih 0")
+                price = float(current_values[2].replace("RM", ""))
+                new_total = price * new_quantity
+                tree_main.item(item_id, values=(
+                    current_values[0], current_values[1], current_values[2], new_quantity, f"RM {new_total:.2f}"
+                ))
+                update_totals()
+                on_close()
+                entry_barcode.focus_set()
+            except Exception as e:
+                messagebox.showerror("Input Tidak Sah", str(e), parent=modal)
+                quantity_entry.focus()
+        tk.Button(modal, text="Simpan", command=submit_quantity, width=12, bg="#32CD32", fg="white").pack(pady=10)
+        tk.Button(modal, text="Batal", command=on_close, width=12).pack()
+        modal.bind('<Return>', lambda e: submit_quantity())
+        modal.protocol("WM_DELETE_WINDOW", on_close)
+        modal.transient(dashboard)
+        modal.grab_set()
+        modal.wait_window()
 
     def tree_main_double_click(event):
         sel = tree_main.focus()
@@ -1183,6 +1311,23 @@ def open_cashier_dashboard(user_id):
         entry_amount_paid.delete(0, tk.END),
         label_change.configure(text="Hutang" if payment_var.get() == "Hutang" else "RM 0.00", text_color="orange" if payment_var.get() == "Hutang" else "white")
     ))
+
+    # PATCH: auto fokus barcode (letak selepas SEMUA entry didefinisi)
+    def keep_focus_barcode():
+        focus_widget = dashboard.focus_get()
+        allowed_entries = {entry_barcode, entry_discount, entry_tax, entry_amount_paid}
+        if not search_popup_open and not update_qty_popup_open and (focus_widget not in allowed_entries):
+            try:
+                entry_barcode.focus_set()
+            except Exception:
+                pass
+        dashboard.after(10000, keep_focus_barcode)
+    keep_focus_barcode()
+
+    # PATCH: HOTKEY
+    dashboard.bind('<F1>', lambda e: entry_amount_paid.focus_set())
+    dashboard.bind('<F2>', lambda e: complete_transaction())
+    dashboard.bind('<F5>', lambda e: update_quantity_popup())
 
     load_today_sales()
     load_low_stock_products()
