@@ -399,7 +399,7 @@ def show_login_window():
     frame = ctk.CTkFrame(root)
     frame.pack(pady=50, padx=20, fill="both", expand=True)
 
-    ctk.CTkLabel(frame, text="KAK NAH MINI MARKET", font=("Arial", 20, "bold")).pack(pady=20)
+    ctk.CTkLabel(frame, text="KAK NAH KEDAI RUNCIT", font=("Arial", 20, "bold")).pack(pady=20)
     ctk.CTkLabel(frame, text="Username:").pack()
 
     entry_username = ctk.CTkEntry(frame)
@@ -568,13 +568,13 @@ def open_cashier_dashboard(user_id):
     left.grid(row=0, column=0, sticky="nsew")
     scan_frame = ctk.CTkFrame(left)
     scan_frame.pack(fill="x", pady=10)
-    ctk.CTkLabel(scan_frame, text="Scan Barcode:", font=("Arial", 15)).pack(side="left", padx=(8, 4))
-    entry_barcode = ctk.CTkEntry(scan_frame, font=("Arial", 16), width=220)
+    ctk.CTkLabel(scan_frame, text="Scan Barcode:", font=("Arial", 18, "bold")).pack(side="left", padx=(8, 4))
+    entry_barcode = ctk.CTkEntry(scan_frame, font=("Arial", 18, "bold"), width=220)
     entry_barcode.pack(side="left", padx=(4, 8))
     entry_barcode.focus_set()
     entry_barcode.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(entry_barcode))
-    ctk.CTkCheckBox(scan_frame, text="Cetak Resit", variable=print_receipt_var, checkbox_height=22, checkbox_width=22, font=("Arial", 14, "bold")).pack(side="left", padx=(8, 6))
-    ctk.CTkCheckBox(scan_frame, text="Buka Laci", variable=open_drawer_var, checkbox_height=22, checkbox_width=22, font=("Arial", 14, "bold")).pack(side="left", padx=(6, 4))
+    ctk.CTkCheckBox(scan_frame, text="Cetak Resit", variable=print_receipt_var, checkbox_height=22, checkbox_width=22, font=("Arial", 18, "bold")).pack(side="left", padx=(8, 6))
+    ctk.CTkCheckBox(scan_frame, text="Buka Laci", variable=open_drawer_var, checkbox_height=22, checkbox_width=22, font=("Arial", 18, "bold")).pack(side="left", padx=(6, 4))
 
     notebook = ttk.Notebook(left)
     notebook.pack(fill="both", expand=True)
@@ -583,19 +583,19 @@ def open_cashier_dashboard(user_id):
     style = ttk.Style()
     style.theme_use("clam")
     style.configure("Cart.Treeview", font=("Arial", 18, "bold"), rowheight=38)
-    style.configure("Cart.Treeview.Heading", font=("Arial", 15, "bold"))
+    style.configure("Cart.Treeview.Heading", font=("Arial", 18, "bold"))
     columns = ("ID", "Nama Produk", "Harga", "Kuantiti", "Total")
     tree_main = ttk.Treeview(cart_frame, columns=columns, show="headings", style="Cart.Treeview")
     tree_main.heading("ID", text="ID")
-    tree_main.column("ID", width=60)
+    tree_main.column("ID", width=30)
     tree_main.heading("Nama Produk", text="Nama Produk")
-    tree_main.column("Nama Produk", width=220)
+    tree_main.column("Nama Produk", width=250)
     tree_main.heading("Harga", text="Harga")
-    tree_main.column("Harga", width=120)
+    tree_main.column("Harga", width=50)
     tree_main.heading("Kuantiti", text="Kuantiti")
-    tree_main.column("Kuantiti", width=100)
+    tree_main.column("Kuantiti", width=50)
     tree_main.heading("Total", text="Total")
-    tree_main.column("Total", width=140)
+    tree_main.column("Total", width=50)
     tree_main.pack(fill="both", expand=True, padx=10, pady=10)
     sales_frame = tk.Frame(notebook)
     notebook.add(sales_frame, text="Jualan Hari Ini")
@@ -720,33 +720,40 @@ def open_cashier_dashboard(user_id):
     right.grid(row=0, column=1, sticky="nsew", padx=10, pady=10)
     ctk.CTkLabel(right, text="Transaksi", font=("Arial", 20, "bold")).pack(pady=10, fill="x")
 
+# ... (bahagian awal open_cashier_dashboard kekal sama)
+
     button_grid = ctk.CTkFrame(right)
     button_grid.pack(pady=3, fill="x", padx=26)
     btn_detect = ctk.CTkButton(
-        button_grid, text="Detect Printer", fg_color="#9444DD", text_color="white",
-        font=("Arial", 16, "bold"), command=lambda: select_printer_popup(dashboard)
+        button_grid, text="Detect \n Printer", fg_color="#9444DD", text_color="white",
+        font=("Arial", 17, "bold"), command=lambda: select_printer_popup(dashboard),
+        width=120, height=50
     )
-    btn_detect.grid(row=0, column=0, padx=2, pady=5, sticky="ew")
+    btn_detect.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
     btn_virtual = ctk.CTkButton(
-        button_grid, text="Virtual Keyboard", fg_color="#20B2AA", text_color="white",
-        font=("Arial", 16, "bold"), command=lambda: CTkVirtualKeyboard(dashboard)
+        button_grid, text="Virtual \n Keyboard", fg_color="#20B2AA", text_color="white",
+        font=("Arial", 17, "bold"), command=lambda: CTkVirtualKeyboard(dashboard),
+        width=120, height=50
     )
-    btn_virtual.grid(row=0, column=1, padx=2, pady=5, sticky="ew")
+    btn_virtual.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
     btn_cari = ctk.CTkButton(
-        button_grid, text="Cari Produk", fg_color="#FFD700", text_color="black",
-        font=("Arial", 17, "bold"), command=lambda: open_search_product()
+        button_grid, text="Cari \n Produk", fg_color="#FFD700", text_color="black",
+        font=("Arial", 17, "bold"), command=lambda: open_search_product(),
+        width=120, height=50
     )
-    btn_cari.grid(row=1, column=0, padx=2, pady=5, sticky="ew")
+    btn_cari.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
     btn_hapus = ctk.CTkButton(
-        button_grid, text="Hapus Produk", fg_color="#FF6347", text_color="white",
-        font=("Arial", 17, "bold"), command=lambda: remove_item()
+        button_grid, text="Hapus \n Produk", fg_color="#FF6347", text_color="white",
+        font=("Arial", 17, "bold"), command=lambda: remove_item(),
+        width=120, height=50
     )
-    btn_hapus.grid(row=1, column=1, padx=2, pady=5, sticky="ew")
+    btn_hapus.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
     btn_laci = ctk.CTkButton(
-        button_grid, text="Buka Laci", fg_color="#4169E1", text_color="white",
-        font=("Arial", 17, "bold"), command=open_cash_drawer
+        button_grid, text="Buka \n Laci", fg_color="#4169E1", text_color="white",
+        font=("Arial", 17, "bold"), command=open_cash_drawer,
+        width=120, height=50
     )
-    btn_laci.grid(row=2, column=0, padx=2, pady=5, sticky="ew")
+    btn_laci.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
 
     def confirm_logout(dashboard, user_id):
         def on_keluar_tanpa_shift():
@@ -760,7 +767,7 @@ def open_cashier_dashboard(user_id):
                 show_login_window()
 
         def on_tutup_shift():
-            tutup_shift()  # Pastikan fungsi tutup_shift memang wujud dalam dashboard
+            tutup_shift()
 
         def on_batal():
             confirm_win.destroy()
@@ -780,15 +787,18 @@ def open_cashier_dashboard(user_id):
         confirm_win.wait_window()
     btn_keluar = ctk.CTkButton(
         button_grid, text="Keluar", fg_color="#B22222", text_color="white",
-        font=("Arial", 16, "bold"),
-        command=lambda: confirm_logout(dashboard, user_id)
+        font=("Arial", 17, "bold"),
+        command=lambda: confirm_logout(dashboard, user_id),
+        width=120, height=50
     )
-    btn_keluar.grid(row=2, column=1, padx=2, pady=5, sticky="ew")
+    btn_keluar.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
     button_grid.columnconfigure(0, weight=1)
     button_grid.columnconfigure(1, weight=1)
 
+# ... (baki kod open_cashier_dashboard kekal sama)
+
     ctk.CTkButton(
-        right, text="Selesaikan Transaksi", font=("Arial", 19, "bold"),
+        right, text="Selesaikan Transaksi", font=("Arial", 19, "bold"), width=120, height=80,
         fg_color="#32CD32", command=lambda: complete_transaction()
     ).pack(fill="x", padx=30, pady=30)
 
