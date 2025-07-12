@@ -270,7 +270,7 @@ def print_receipt(items, total, amount_paid, payment_method, customer_info=None,
             f"\x1D\x68\x50\x1D\x77\x02\x1D\x6B\x49{chr(len(receipt_no))}{receipt_no}\n",
             "\x1B\x61\x00",
             "\n\n\n",
-            "\x1D\x56\x01"  # Tambah perintah potong kertas penuh
+            "x1D\x56\x41\x03"  # Tambah perintah potong kertas penuh
         ])
 
         # Tambah perintah membuka cash drawer (ESC/POS)
