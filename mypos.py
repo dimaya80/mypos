@@ -480,7 +480,7 @@ def show_shift_start_modal(user_id, root_window):
 def open_cashier_dashboard(user_id):
     dashboard = tk.Tk()
     dashboard.title("Sistem Kasir")
-    dashboard.geometry("1600x900")
+    dashboard.geometry("1400x900")
     dashboard.attributes("-fullscreen", True)
 
     global search_popup_open
