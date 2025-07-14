@@ -222,48 +222,111 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET[
     $stmt->close();
 }
 
-// GET PRODUCT BY BARCODE
-elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['barcode'])) {
-    $barcode = $_GET['barcode'];
+// GET PRODUCT BY BARCODE (Hanya kalau tiada action lain)
+elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && !isset($_GET['action']) && isset($_GET['barcode'])) {
+    $barcode = trim($_GET['barcode']);
+    $debug = "Scanning barcode: $barcode\\n";
+
+    // Semak data asas + stok dari supplier_prices
+    $checkSql = "SELECT i.id, i.item_name, i.barcode_per_unit, i.barcode_per_pack, i.barcode_per_box,
+                        COALESCE(sp.stock_per_unit, 0) as stock
+                 FROM items i
+                 LEFT JOIN supplier_prices sp ON sp.item_id = i.id
+                 WHERE ? IN (i.barcode_per_unit, i.barcode_per_pack, i.barcode_per_box)
+                 ORDER BY sp.date_keyin DESC LIMIT 1";
+    $checkStmt = $conn->prepare($checkSql);
+    if (!$checkStmt) {
+        $debug .= "Check prepare failed: " . $conn->error . "\\n";
+        echo json_encode(['status' => 'error', 'message' => 'Check prepare failed', 'debug' => $debug]);
+        exit;
+    }
+    $checkStmt->bind_param("s", $barcode);
+    $checkStmt->execute();
+    $checkResult = $checkStmt->get_result();
+    $itemCheck = $checkResult->fetch_assoc();
+    $debug .= "Items check result: " . print_r($itemCheck, true) . "\\n";
+    $checkStmt->close();
+
+    if (!$itemCheck) {
+        echo json_encode(['status' => 'error', 'message' => 'Produk tidak wujud', 'debug' => $debug]);
+        exit;
+    }
+
+    if ($itemCheck['stock'] <= 0) {
+        echo json_encode(['status' => 'error', 'message' => 'Stok habis', 'debug' => $debug]);
+        exit;
+    }
+
     $sql = "SELECT 
-               i.id, 
-               i.item_name as name, 
-               (SELECT sp.supplier_price_unit 
-                FROM supplier_prices sp 
-                WHERE sp.item_id = i.id 
-                ORDER BY sp.date_keyin DESC 
-                LIMIT 1) as price,
-               i.barcode_per_unit,
-               i.is_weighable,
-               i.unit_of_measurement
+                i.id, 
+                i.item_name as name,
+                COALESCE(
+                    (SELECT sp.supplier_price_box 
+                     FROM supplier_prices sp 
+                     WHERE sp.item_id = i.id 
+                     AND sp.pack_per_box > 0 
+                     AND ? = i.barcode_per_box 
+                     ORDER BY sp.date_keyin DESC LIMIT 1),
+                    (SELECT sp.supplier_price_pack 
+                     FROM supplier_prices sp 
+                     WHERE sp.item_id = i.id 
+                     AND sp.unit_per_pack > 0 
+                     AND ? = i.barcode_per_pack 
+                     ORDER BY sp.date_keyin DESC LIMIT 1),
+                    (SELECT sp.supplier_price_unit 
+                     FROM supplier_prices sp 
+                     WHERE sp.item_id = i.id 
+                     AND ? = i.barcode_per_unit 
+                     ORDER BY sp.date_keyin DESC LIMIT 1)
+                ) as price,
+                i.barcode_per_unit,
+                i.barcode_per_pack,
+                i.barcode_per_box,
+                i.is_weighable,
+                i.unit_of_measurement
             FROM items i
-            WHERE i.barcode_per_unit = ? OR 
-                  i.barcode_per_pack = ? OR 
-                  i.barcode_per_box = ?
+            WHERE ? IN (i.barcode_per_unit, i.barcode_per_pack, i.barcode_per_box)
             LIMIT 1";
 
     $stmt = $conn->prepare($sql);
     if (!$stmt) {
-        echo json_encode(['status' => 'error', 'message' => 'Prepare failed: ' . $conn->error]);
-        error_log("Get product by barcode error: Prepare failed - " . $conn->error);
+        $debug .= "Prepare failed: " . $conn->error . "\\n";
+        echo json_encode(['status' => 'error', 'message' => 'Prepare failed: ' . $conn->error, 'debug' => $debug]);
         exit;
     }
-    $stmt->bind_param("sss", $barcode, $barcode, $barcode);
+
+    $stmt->bind_param("ssss", $barcode, $barcode, $barcode, $barcode);
     $stmt->execute();
     $result = $stmt->get_result();
 
     $product = $result->fetch_assoc();
     if ($product) {
+        $matched_barcode_type = '';
+        if (trim($product['barcode_per_unit']) === trim($barcode)) {
+            $matched_barcode_type = 'unit';
+        } elseif (trim($product['barcode_per_pack']) === trim($barcode)) {
+            $matched_barcode_type = 'pack';
+        } elseif (trim($product['barcode_per_box']) === trim($barcode)) {
+            $matched_barcode_type = 'box';
+        }
+
+        $debug .= "Found product: " . print_r($product, true) . "\\n";
         echo json_encode([
-            'id' => $product['id'],
-            'name' => $product['name'],
-            'price' => $product['price'],
-            'barcode' => $product['barcode_per_unit'],
-            'is_weighable' => isset($product['is_weighable']) ? (int)$product['is_weighable'] : 0,
-            'unit_of_measurement' => $product['unit_of_measurement'] ?? ''
+            'status' => 'success',
+            'data' => [
+                'id' => $product['id'],
+                'name' => $product['name'],
+                'price' => $product['price'] ?? 0.00,
+                'barcode' => $barcode,
+                'barcode_type' => $matched_barcode_type,
+                'is_weighable' => isset($product['is_weighable']) ? (int)$product['is_weighable'] : 0,
+                'unit_of_measurement' => $product['unit_of_measurement'] ?? ''
+            ],
+            'debug' => $debug
         ]);
     } else {
-        echo json_encode(["error" => "Product not found"]);
+        $debug .= "Product not found for barcode: $barcode. Query result: " . print_r($result->fetch_all(), true) . "\\n";
+        echo json_encode(["status" => "error", "message" => "Product not found", 'debug' => $debug]);
     }
     $stmt->close();
 }
@@ -274,44 +337,89 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && (isset($_GET['search']) || (isse
     $search = "%" . $conn->real_escape_string($search_term) . "%";
     $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
 
-    $sql = "SELECT 
-                i.id, 
-                i.item_name as name, 
-                latest_price.supplier_price_unit as price,
-                i.barcode_per_unit as barcode,
-                (COALESCE(total_stock.stock_per_unit, 0) - 
-                 COALESCE(total_sales.quantity, 0)) as stock,
-                i.is_weighable,
-                i.unit_of_measurement
-            FROM items i
-            LEFT JOIN (
-                SELECT item_id, MAX(date_keyin) as max_date
-                FROM supplier_prices
-                GROUP BY item_id
-            ) latest_date ON i.id = latest_date.item_id
-            LEFT JOIN supplier_prices latest_price ON 
-                latest_price.item_id = latest_date.item_id AND 
-                latest_price.date_keyin = latest_date.max_date
-            LEFT JOIN (
-                SELECT item_id, SUM(stock_per_unit) as stock_per_unit
-                FROM supplier_prices
-                GROUP BY item_id
-            ) total_stock ON i.id = total_stock.item_id
-            LEFT JOIN (
-                SELECT si.item_id, SUM(si.quantity) as quantity
-                FROM sales_items si
-                JOIN sales s ON si.sale_id = s.id
-                GROUP BY si.item_id
-            ) total_sales ON i.id = total_sales.item_id
-            WHERE i.item_name LIKE ?
-            ORDER BY 
-                CASE 
-                    WHEN i.item_name LIKE ? THEN 0
-                    WHEN i.item_name LIKE ? THEN 1
-                    ELSE 2
-                END,
-                i.item_name
-            LIMIT ?";
+    $sql = "
+        SELECT 
+            i.id, 
+            i.item_name as name, 
+            sp.supplier_price_unit as price,
+            i.barcode_per_unit as barcode,
+            (COALESCE(SUM(sp.stock_per_unit), 0) - 
+             COALESCE((SELECT SUM(si.quantity) 
+                      FROM sales_items si
+                      JOIN sales s ON si.sale_id = s.id
+                      WHERE si.item_id = i.id), 0)) as stock,
+            i.is_weighable,
+            i.unit_of_measurement,
+            'unit' as barcode_type
+        FROM items i
+        LEFT JOIN (
+            SELECT item_id, MAX(date_keyin) as max_date
+            FROM supplier_prices
+            GROUP BY item_id
+        ) latest_date ON i.id = latest_date.item_id
+        LEFT JOIN supplier_prices sp ON 
+            sp.item_id = latest_date.item_id AND 
+            sp.date_keyin = latest_date.max_date
+        WHERE i.item_name LIKE ? AND i.barcode_per_unit IS NOT NULL
+        GROUP BY i.id
+        UNION
+        SELECT 
+            i.id, 
+            CONCAT(i.item_name, ' (Pek)') as name, 
+            sp.supplier_price_pack as price,
+            i.barcode_per_pack as barcode,
+            (COALESCE(SUM(sp.stock_per_unit) / sp.unit_per_pack, 0) - 
+             COALESCE((SELECT SUM(si.quantity) 
+                      FROM sales_items si
+                      JOIN sales s ON si.sale_id = s.id
+                      WHERE si.item_id = i.id), 0)) as stock,
+            i.is_weighable,
+            i.unit_of_measurement,
+            'pack' as barcode_type
+        FROM items i
+        LEFT JOIN (
+            SELECT item_id, MAX(date_keyin) as max_date
+            FROM supplier_prices
+            GROUP BY item_id
+        ) latest_date ON i.id = latest_date.item_id
+        LEFT JOIN supplier_prices sp ON 
+            sp.item_id = latest_date.item_id AND 
+            sp.date_keyin = latest_date.max_date
+        WHERE i.item_name LIKE ? AND i.barcode_per_pack IS NOT NULL
+        GROUP BY i.id
+        UNION
+        SELECT 
+            i.id, 
+            CONCAT(i.item_name, ' (Kotak)') as name, 
+            sp.supplier_price_box as price,
+            i.barcode_per_box as barcode,
+            (COALESCE(SUM(sp.stock_per_unit) / (sp.unit_per_pack * sp.pack_per_box), 0) - 
+             COALESCE((SELECT SUM(si.quantity) 
+                      FROM sales_items si
+                      JOIN sales s ON si.sale_id = s.id
+                      WHERE si.item_id = i.id), 0)) as stock,
+            i.is_weighable,
+            i.unit_of_measurement,
+            'box' as barcode_type
+        FROM items i
+        LEFT JOIN (
+            SELECT item_id, MAX(date_keyin) as max_date
+            FROM supplier_prices
+            GROUP BY item_id
+        ) latest_date ON i.id = latest_date.item_id
+        LEFT JOIN supplier_prices sp ON 
+            sp.item_id = latest_date.item_id AND 
+            sp.date_keyin = latest_date.max_date
+        WHERE i.item_name LIKE ? AND i.barcode_per_box IS NOT NULL
+        GROUP BY i.id
+        ORDER BY 
+            CASE 
+                WHEN name LIKE ? THEN 0
+                WHEN name LIKE ? THEN 1
+                ELSE 2
+            END,
+            name
+        LIMIT ?";
 
     $stmt = $conn->prepare($sql);
     if (!$stmt) {
@@ -322,7 +430,7 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && (isset($_GET['search']) || (isse
 
     $exact_match = $conn->real_escape_string($search_term) . "%";
     $starts_with = $conn->real_escape_string($search_term) . "%";
-    $stmt->bind_param("sssi", $search, $exact_match, $starts_with, $limit);
+    $stmt->bind_param("sssssi", $search, $search, $search, $exact_match, $starts_with, $limit);
 
     if (!$stmt->execute()) {
         echo json_encode(['status' => 'error', 'message' => 'Execute failed: ' . $stmt->error]);
@@ -341,7 +449,8 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && (isset($_GET['search']) || (isse
             'barcode' => $row['barcode'],
             'stock' => (int)$row['stock'],
             'is_weighable' => isset($row['is_weighable']) ? (int)$row['is_weighable'] : 0,
-            'unit_of_measurement' => $row['unit_of_measurement'] ?? ''
+            'unit_of_measurement' => $row['unit_of_measurement'] ?? '',
+            'barcode_type' => $row['barcode_type']
         ];
     }
 
@@ -736,107 +845,64 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data
     }
 }
 
-// GET PRODUCT DETAILS
-elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] == 'get_product_details' && isset($_GET['item_id'])) {
-    $item_id = (int)$_GET['item_id'];
+elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET['action'] == 'get_product_details' && isset($_GET['barcode'])) {
+    $barcode = trim($_GET['barcode']);
+    $debug = "Fetching details for barcode: $barcode\\n";
 
-    $product_sql = "SELECT 
-                       i.id, i.item_name, i.barcode_per_unit,
-                       c.category_name
-                    FROM items i
-                    LEFT JOIN categories c ON i.category_id = c.id
-                    WHERE i.id = ?";
-    $stmt = $conn->prepare($product_sql);
+    if (!$conn) {
+        $debug .= "Database connection failed: No valid connection\\n";
+        echo json_encode(['status' => 'error', 'message' => 'Database connection failed', 'debug' => $debug]);
+        exit;
+    }
+
+    $sql = "SELECT i.id, i.item_name, COALESCE(sp.unit_per_pack, 1) as unit_per_pack, COALESCE(sp.pack_per_box, 1) as pack_per_box
+            FROM items i
+            LEFT JOIN supplier_prices sp ON sp.item_id = i.id AND sp.date_keyin = (
+                SELECT MAX(date_keyin) FROM supplier_prices sp2 WHERE sp2.item_id = i.id
+            )
+            WHERE ? IN (i.barcode_per_unit, i.barcode_per_pack, i.barcode_per_box)
+            LIMIT 1";
+    $stmt = $conn->prepare($sql);
     if (!$stmt) {
-        echo json_encode(['status' => 'error', 'message' => 'Prepare failed: ' . $conn->error]);
-        error_log("Get product details error: Prepare failed - " . $conn->error);
-        exit;
-    }
-    $stmt->bind_param("i", $item_id);
-    $stmt->execute();
-    $product = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-
-    if (!$product) {
-        echo json_encode(['status' => 'error', 'message' => 'Product not found']);
+        $debug .= "Prepare failed: " . $conn->error . "\\n";
+        echo json_encode(['status' => 'error', 'message' => 'Prepare failed: ' . $conn->error, 'debug' => $debug]);
         exit;
     }
 
-    $stock_sql = "SELECT 
-                     COALESCE(SUM(stock_per_unit), 0) as total_stock,
-                     COUNT(DISTINCT supplier_id) as supplier_count
-                  FROM supplier_prices
-                  WHERE item_id = ?";
-    $stmt = $conn->prepare($stock_sql);
-    if (!$stmt) {
-        echo json_encode(['status' => 'error', 'message' => 'Prepare failed: ' . $conn->error]);
-        error_log("Get product details error: Prepare failed for stock - " . $conn->error);
+    $stmt->bind_param("s", $barcode);
+    if (!$stmt->execute()) {
+        $debug .= "Execute failed: " . $stmt->error . "\\n";
+        echo json_encode(['status' => 'error', 'message' => 'Execute failed: ' . $stmt->error, 'debug' => $debug]);
+        $stmt->close();
         exit;
     }
-    $stmt->bind_param("i", $item_id);
-    $stmt->execute();
-    $stock_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
+    $result = $stmt->get_result();
+    $product = $result->fetch_assoc();
 
-    $price_sql = "SELECT 
-                     sp.supplier_price_unit, sp.price_cost,
-                     s.supplier_name, sp.date_keyin
-                  FROM supplier_prices sp
-                  LEFT JOIN suppliers s ON sp.supplier_id = s.id
-                  WHERE sp.item_id = ?
-                  ORDER BY sp.date_keyin DESC
-                  LIMIT 1";
-    $stmt = $conn->prepare($price_sql);
-    if (!$stmt) {
-        echo json_encode(['status' => 'error', 'message' => 'Prepare failed: ' . $conn->error]);
-        error_log("Get product details error: Prepare failed for price - " . $conn->error);
-        exit;
-    }
-    $stmt->bind_param("i", $item_id);
-    $stmt->execute();
-    $price_info = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-
-    $suppliers_sql = "SELECT 
-                         DISTINCT s.id, s.supplier_name
-                      FROM supplier_prices sp
-                      JOIN suppliers s ON sp.supplier_id = s.id
-                      WHERE sp.item_id = ?";
-    $stmt = $conn->prepare($suppliers_sql);
-    if (!$stmt) {
-        echo json_encode(['status' => 'error', 'message' => 'Prepare failed: ' . $conn->error]);
-        error_log("Get product details error: Prepare failed for suppliers - " . $conn->error);
-        exit;
-    }
-    $stmt->bind_param("i", $item_id);
-    $stmt->execute();
-    $suppliers = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-    $stmt->close();
-
-    $response = [
-        'status' => 'success',
-        'data' => [
-            'product' => [
+    if ($product) {
+        $debug .= "Found details: " . print_r($product, true) . "\\n";
+        echo json_encode([
+            'status' => 'success',
+            'data' => [
                 'id' => $product['id'],
                 'name' => $product['item_name'],
-                'barcode' => $product['barcode_per_unit'],
-                'category' => $product['category_name']
+                'unit_per_pack' => $product['unit_per_pack'],
+                'pack_per_box' => $product['pack_per_box']
             ],
-            'stock' => [
-                'total' => (int)$stock_info['total_stock'],
-                'supplier_count' => (int)$stock_info['supplier_count']
-            ],
-            'last_price' => $price_info ? [
-                'supplier_price_unit' => $price_info['supplier_price_unit'],
-                'price_cost' => $price_info['price_cost'],
-                'supplier_name' => $price_info['supplier_name'],
-                'date' => $price_info['date_keyin']
-            ] : null,
-            'suppliers' => $suppliers
-        ]
-    ];
-
-    echo json_encode($response);
+            'debug' => $debug
+        ]);
+    } else {
+        $debug .= "No details found for barcode: $barcode. Checking items: ";
+        $checkSql = "SELECT id, item_name FROM items WHERE ? IN (barcode_per_unit, barcode_per_pack, barcode_per_box)";
+        $checkStmt = $conn->prepare($checkSql);
+        $checkStmt->bind_param("s", $barcode);
+        $checkStmt->execute();
+        $checkResult = $checkStmt->get_result();
+        $checkProduct = $checkResult->fetch_assoc();
+        $debug .= print_r($checkProduct, true) . "\\n";
+        echo json_encode(['status' => 'error', 'message' => 'Product details not found', 'debug' => $debug]);
+    }
+    $stmt->close();
 }
 
 // GET PRODUCT BY NAME
