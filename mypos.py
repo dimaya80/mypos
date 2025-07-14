@@ -9,7 +9,7 @@ import threading
 from datetime import datetime
 import queue
 
-# Tetapkan tema secara global (pindahkan ke atas fail jika belum ada)
+# Tetapkan tema secara global
 ctk.set_appearance_mode("dark")
 ctk.set_default_color_theme("blue")
 
@@ -19,7 +19,8 @@ try:
 except ImportError:
     win32print = None
 
-API_URL = "http://127.0.0.1/api/api.php"
+# API_URL = "http://127.0.0.1/api/api.php"
+API_URL = "https://gsand.xyz/api/api.php"
 PRIMARY_COLOR = "#2B7A78"
 SELECTED_PRINTER_PORT = None
 
@@ -33,7 +34,6 @@ def detect_thermal_printer_serial():
 def auto_sync(sync_queue, sync_label):
     while True:
         try:
-            # Kosongkan teks terlebih dahulu
             sync_queue.put("🔄 Auto-sync bermula...\n")
             r1 = requests.get("http://127.0.0.1/api/sync_push.php", timeout=60)
             push_msg = f"➡️ Push Response: {r1.status_code} {r1.text.strip()}\n"
@@ -55,7 +55,7 @@ def update_sync_label(sync_queue, sync_label):
         try:
             message = sync_queue.get(timeout=1)
             current_text = current_text + message
-            sync_label.configure(text=current_text, text_color="white")  # Tetapkan warna teks putih
+            sync_label.configure(text=current_text, text_color="white")
             sync_queue.task_done()
         except queue.Empty:
             continue
@@ -240,7 +240,7 @@ def print_receipt(items, total, amount_paid, payment_method, customer_info=None,
             quantity = float(item['quantity'])
             price = float(item['price'])
             item_total = float(item['total'])
-            qty_str = f"{quantity:.3f}" if quantity != int(quantity) else f"{int(quantity)}"
+            qty_str = f"{int(quantity)}" if quantity == int(quantity) else f"{quantity:.3f}"
             price_str = f"{price:.2f}"
             total_str = f"{item_total:.2f}"
             receipt_lines.append(f"{name:<20}{qty_str:>6}{price_str:>10}{total_str:>12}\n")
@@ -270,11 +270,11 @@ def print_receipt(items, total, amount_paid, payment_method, customer_info=None,
             f"\x1D\x68\x50\x1D\x77\x02\x1D\x6B\x49{chr(len(receipt_no))}{receipt_no}\n",
             "\x1B\x61\x00",
             "\n\n\n",
-            "x1D\x56\x41\x03"  # Tambah perintah potong kertas penuh
+            "\x1D\x56\x41\x03"
         ])
 
         # Tambah perintah membuka cash drawer (ESC/POS)
-        receipt_lines.append("\x1B\x70\x00\x19\xFA")  # Perintah standard untuk membuka cash drawer
+        receipt_lines.append("\x1B\x70\x00\x19\xFA")
 
         receipt_text = "".join(receipt_lines)
         port = SELECTED_PRINTER_PORT or detect_thermal_printer_serial()
@@ -320,16 +320,14 @@ def open_cash_drawer():
         # Gunakan printer default atau yang dipilih
         printer_name = win32print.GetDefaultPrinter() if not SELECTED_PRINTER_PORT else SELECTED_PRINTER_PORT
         hprinter = win32print.OpenPrinter(printer_name)
-
         try:
             # Mulakan dokumen kosong untuk menghantar perintah cash drawer
             hjob = win32print.StartDocPrinter(hprinter, 1, ("Cash Drawer Command", None, "RAW"))
             win32print.StartPagePrinter(hprinter)
 
             # Perintah ESC/POS untuk membuka cash drawer
-            cash_drawer_command = b'\x1B\x70\x00\x19\xFA'  # Drawer 1, 25ms on, 250ms off
+            cash_drawer_command = b'\x1B\x70\x00\x19\xFA'
             win32print.WritePrinter(hprinter, cash_drawer_command)
-
             win32print.EndPagePrinter(hprinter)
             win32print.EndDocPrinter(hprinter)
             messagebox.showinfo("Berjaya", "Laci wang berjaya dibuka!")
@@ -387,7 +385,6 @@ def show_login_window():
     entry_username = ctk.CTkEntry(frame)
     entry_username.pack()
     entry_username.focus()
-
     ctk.CTkLabel(frame, text="Password:").pack()
     entry_password = ctk.CTkEntry(frame, show="*")
     entry_password.pack()
@@ -398,14 +395,13 @@ def show_login_window():
         if not username or not password:
             messagebox.showwarning("Peringatan", "Username dan password wajib diisi!", parent=root)
             return
-
         try:
             response = requests.post(API_URL, json={"action": "login", "username": username, "password": password}, timeout=5)
             result = response.json()
             if result.get("status") == "success":
                 user_id = result["user"]["id"]
                 root.withdraw()
-                check_or_start_shift(user_id, root)  # Anggap fungsi ini wujud
+                check_or_start_shift(user_id, root)
             else:
                 messagebox.showerror("Login Gagal", result.get("message", "Login gagal"), parent=root)
         except Exception as e:
@@ -420,7 +416,6 @@ def check_or_start_shift(user_id, root_window):
     global shift_popup_open
     if shift_popup_open:
         return
-
     try:
         resp = requests.get(f"{API_URL}?action=check_shift&user_id={user_id}", timeout=5)
         data = resp.json()
@@ -438,12 +433,10 @@ def show_shift_start_modal(user_id, root_window):
     if shift_popup_open:
         return
     shift_popup_open = True
-
     win = ctk.CTkToplevel(master=root_window)
     win.title("Mula Shift")
     win.geometry("350x250")
     win.attributes('-topmost', True)
-
     ctk.CTkLabel(win, text="Shift belum bermula!", font=("Arial", 16, "bold")).pack(pady=10)
     ctk.CTkLabel(win, text="Masukkan Cash Awal (RM):").pack()
     entry_cash = ctk.CTkEntry(win)
@@ -556,30 +549,21 @@ def open_cashier_dashboard(user_id):
     tree_main.column("Total", width=50)
     tree_main.pack(fill="both", expand=True, padx=10, pady=10)
 
-    # Frame dengan scrollbar untuk paparan stabil
-    sync_frame = ctk.CTkFrame(left, height=100, width=510, fg_color="gray20")  # Latar belakang gelap
+    sync_frame = ctk.CTkFrame(left, height=100, width=510, fg_color="gray20")
     sync_frame.pack(fill="x", padx=10, pady=5)
-
-    # Tambah Canvas dan Scrollbar
-    canvas = tk.Canvas(sync_frame, height=100, width=510, bg="gray20")  # Latar belakang gelap
+    canvas = tk.Canvas(sync_frame, height=100, width=510, bg="gray20")
     scrollbar = ttk.Scrollbar(sync_frame, orient="vertical", command=canvas.yview)
-    sync_label = ctk.CTkLabel(canvas, text="", font=("Arial", 12), wraplength=480, justify="left", text_color="white")  # Teks putih
-
-    # Konfigurasi Canvas
+    sync_label = ctk.CTkLabel(canvas, text="", font=("Arial", 12), wraplength=480, justify="left", text_color="white")
     canvas.configure(yscrollcommand=scrollbar.set)
     canvas.create_window((0, 0), window=sync_label, anchor="nw")
 
-    # Pastikan canvas boleh scroll jika kandungan melebihi
     def configure_scrollregion(event):
         canvas.configure(scrollregion=canvas.bbox("all"))
 
     sync_label.bind("<Configure>", configure_scrollregion)
-
-    # Susun atur
     scrollbar.pack(side="right", fill="y")
     canvas.pack(side="left", fill="both", expand=True)
 
-    # Thread untuk auto sync dan update label
     sync_queue = queue.Queue()
     sync_thread = threading.Thread(target=auto_sync, args=(sync_queue, sync_label), daemon=True)
     update_thread = threading.Thread(target=update_sync_label, args=(sync_queue, sync_label), daemon=True)
@@ -595,7 +579,7 @@ def open_cashier_dashboard(user_id):
         sales_tree.column(col, width=110)
     sales_tree.pack(fill="both", expand=True, padx=10, pady=10)
     sales_btn_frame = tk.Frame(sales_frame)
-    sales_btn_frame.pack(fill="x", padx=10, pady=(6,2))
+    sales_btn_frame.pack(fill="x", padx=10, pady=(6, 2))
 
     def load_today_sales():
         sales_tree.delete(*sales_tree.get_children())
@@ -607,8 +591,10 @@ def open_cashier_dashboard(user_id):
                 for sale in data['data']:
                     sales_tree.insert("", "end", values=(
                         sale['no'], sale['receipt_no'], sale['sale_time'],
-                        f"RM {float(sale['total']):.2f}", f"RM {float(sale['discount']):.2f}",
-                        f"RM {float(sale['amount_paid']):.2f}", f"RM {float(sale['change_given']):.2f}",
+                        f"RM {float(sale['total']):.2f}",
+                        f"RM {float(sale['discount']):.2f}",
+                        f"RM {float(sale['amount_paid']):.2f}",
+                        f"RM {float(sale['change_given']):.2f}",
                         sale['payment_method'], sale['status']
                     ))
         except Exception as e:
@@ -700,13 +686,13 @@ def open_cashier_dashboard(user_id):
     button_grid.pack(pady=3, fill="x", padx=26)
     btn_detect = ctk.CTkButton(button_grid, text="Detect \n Printer", fg_color="#9444DD", text_color="white", font=("Arial", 17, "bold"), command=lambda: select_printer_popup(dashboard), width=120, height=50)
     btn_detect.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-    btn_virtual = ctk.CTkButton(button_grid, text="Virtual \n Keyboard [F3]", fg_color="#20B2AA", text_color="white", font=("Arial", 17, "bold"), command=lambda: CTkVirtualKeyboard(dashboard), width=120, height=50)
+    btn_virtual = ctk.CTkButton(button_grid, text="Virtual Keyboard \n [F3]", fg_color="#20B2AA", text_color="white", font=("Arial", 17, "bold"), command=lambda: CTkVirtualKeyboard(dashboard), width=120, height=50)
     btn_virtual.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-    btn_cari = ctk.CTkButton(button_grid, text="Cari \n Produk [F4]", fg_color="#FFD700", text_color="black", font=("Arial", 17, "bold"), command=lambda: open_search_product(), width=120, height=50)
+    btn_cari = ctk.CTkButton(button_grid, text="Cari Produk \n [F4]", fg_color="#FFD700", text_color="black", font=("Arial", 17, "bold"), command=lambda: open_search_product(), width=120, height=50)
     btn_cari.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
     btn_hapus = ctk.CTkButton(button_grid, text="Hapus \n Produk", fg_color="#FF6347", text_color="white", font=("Arial", 17, "bold"), command=lambda: remove_item(), width=120, height=50)
     btn_hapus.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-    btn_laci = ctk.CTkButton(button_grid, text="Buka \n Laci [F6]", fg_color="#4169E1", text_color="white", font=("Arial", 17, "bold"), command=open_cash_drawer, width=120, height=50)
+    btn_laci = ctk.CTkButton(button_grid, text="Buka Laci \n [F6]", fg_color="#4169E1", text_color="white", font=("Arial", 17, "bold"), command=open_cash_drawer, width=120, height=50)
     btn_laci.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
 
     def confirm_logout(dashboard, user_id):
@@ -732,12 +718,13 @@ def open_cashier_dashboard(user_id):
         confirm_win.transient(dashboard)
         confirm_win.grab_set()
         confirm_win.wait_window()
-    btn_keluar = ctk.CTkButton(button_grid, text="Keluar [F10]", fg_color="#B22222", text_color="white", font=("Arial", 17, "bold"), command=lambda: confirm_logout(dashboard, user_id), width=120, height=50)
+
+    btn_keluar = ctk.CTkButton(button_grid, text="Keluar \n [F10]", fg_color="#B22222", text_color="white", font=("Arial", 17, "bold"), command=lambda: confirm_logout(dashboard, user_id), width=120, height=50)
     btn_keluar.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
     button_grid.columnconfigure(0, weight=1)
     button_grid.columnconfigure(1, weight=1)
 
-    ctk.CTkButton(right, text="Selesaikan Transaksi [F2]", font=("Arial", 19, "bold"), width=120, height=80, fg_color="#32CD32", command=lambda: complete_transaction()).pack(fill="x", padx=30, pady=30)
+    ctk.CTkButton(right, text="Selesaikan Transaksi \n [F2]", font=("Arial", 19, "bold"), width=120, height=80, fg_color="#32CD32", command=lambda: complete_transaction()).pack(fill="x", padx=30, pady=30)
 
     subtotal_frame = ctk.CTkFrame(right)
     subtotal_frame.pack(fill="x", padx=10, pady=2)
@@ -862,6 +849,7 @@ def open_cashier_dashboard(user_id):
         if items:
             last_item = items[-1]
             tree_main.selection_set(last_item)
+            tree_main.focus(last_item)
             tree_main.see(last_item)
 
     def scan_barcode(barcode):
@@ -870,18 +858,33 @@ def open_cashier_dashboard(user_id):
         try:
             res = requests.get(f"{API_URL}?barcode={barcode}")
             res.raise_for_status()
+            print(f"Raw response (product): {res.text}")
             product = res.json()
-            if not product or 'id' not in product:
+            if not product or 'data' not in product or 'id' not in product['data']:
                 messagebox.showwarning("Peringatan", "Produk tidak ditemukan!")
                 return
-            product_name = product['name']
-            price_float = float(product['price'])
-            is_weighable = int(product.get('is_weighable', 0))
+            product_data = product['data']
+            product_name = product_data['name']
+            price_float = float(product_data['price'])
+            barcode_type = product_data['barcode_type']
+            is_weighable = int(product_data.get('is_weighable', 0))
+
+            res_details = requests.get(f"{API_URL}?action=get_product_details&barcode={barcode}")
+            res_details.raise_for_status()
+            print(f"Raw response (details): {res_details.text}")
+            details = res_details.json()
+            if not details or 'data' not in details or 'unit_per_pack' not in details['data'] or 'pack_per_box' not in details['data']:
+                messagebox.showwarning("Peringatan", f"Gagal dapatkan butiran produk! Details: {details}")
+                return
+            details_data = details['data']
+            unit_per_pack = int(details_data.get('unit_per_pack', 1))
+            pack_per_box = int(details_data.get('pack_per_box', 1))
+
             if is_weighable:
                 win = tk.Toplevel()
                 win.title("Masukkan Berat (KG)")
                 win.geometry("320x120")
-                tk.Label(win, text=f"Masukkan berat (kg) untuk {product_name}:", font=("Arial", 13)).pack()
+                tk.Label(win, text=f"Masukkan berat (kg) untuk {product_name} ({barcode_type}):", font=("Arial", 13)).pack()
                 qty_entry = tk.Entry(win, font=("Arial", 15), width=10)
                 qty_entry.pack(pady=7)
                 qty_entry.focus()
@@ -903,21 +906,33 @@ def open_cashier_dashboard(user_id):
                 if not quantity:
                     return
             else:
-                quantity = 1
-                for item in tree_main.get_children():
-                    values = tree_main.item(item, 'values')
-                    if values[1] == product_name:
-                        old_qty = float(values[3])
-                        new_quantity = old_qty + 1
-                        new_total = new_quantity * price_float
-                        tree_main.item(item, values=(values[0], values[1], f"RM {price_float:.2f}", new_quantity, f"RM {new_total:.2f}"))
-                        update_totals()
-                        entry_barcode.delete(0, tk.END)
-                        highlight_last_cart_item()
-                        return
+                # Set quantity based on barcode type
+                if barcode_type == 'unit':
+                    quantity = 1
+                elif barcode_type == 'pack':
+                    quantity = 1  # One pack
+                elif barcode_type == 'box':
+                    quantity = 1  # One box
+
+            # Check if item with same product name and barcode type exists in cart
+            for item in tree_main.get_children():
+                values = tree_main.item(item, 'values')
+                if values[1] == product_name and values[5] == barcode_type:
+                    old_qty = float(values[3])
+                    new_quantity = int(old_qty + quantity) if not is_weighable else old_qty + quantity
+                    new_total = new_quantity * price_float
+                    qty_display = f"{new_quantity}" if not is_weighable else f"{new_quantity:.3f}"
+                    tree_main.item(item, values=(values[0], values[1], f"RM {price_float:.2f}", qty_display, f"RM {new_total:.2f}", barcode_type))
+                    update_totals()
+                    entry_barcode.delete(0, tk.END)
+                    highlight_last_cart_item()
+                    return
+
+            # Add new item to cart
             idx = item_counter[0]
             total = quantity * price_float
-            tree_main.insert("", "end", values=(idx, product_name, f"RM {price_float:.2f}", quantity, f"RM {total:.2f}"))
+            qty_display = f"{quantity}" if not is_weighable else f"{quantity:.3f}"
+            tree_main.insert("", "end", values=(idx, product_name, f"RM {price_float:.2f}", qty_display, f"RM {total:.2f}", barcode_type))
             item_counter[0] += 1
             update_totals()
             entry_barcode.delete(0, tk.END)
@@ -974,8 +989,10 @@ def open_cashier_dashboard(user_id):
                 results_tree.delete(*results_tree.get_children())
                 for product in products:
                     results_tree.insert("", "end", values=(
-                        product.get("name", ""), f"RM {float(product.get('price', 0)):.2f}",
-                        product.get("stock", ""), product.get("barcode", "")
+                        product.get("name", ""),
+                        f"RM {float(product.get('price', 0)):.2f}",
+                        product.get("stock", ""),
+                        product.get("barcode", "")
                     ))
             except Exception as e:
                 messagebox.showerror("Error", str(e), parent=win)
@@ -1029,7 +1046,7 @@ def open_cashier_dashboard(user_id):
                     v = tree_main.item(item, 'values')
                     if v[1] == product_name:
                         old_qty = float(v[3])
-                        new_quantity = old_qty + 1
+                        new_quantity = int(old_qty + 1)
                         new_total = new_quantity * price
                         tree_main.item(item, values=(v[0], v[1], f"RM {price:.2f}", new_quantity, f"RM {new_total:.2f}"))
                         update_totals()
@@ -1049,84 +1066,96 @@ def open_cashier_dashboard(user_id):
         results_tree.bind("<Double-1>", lambda e: add_selected_product())
         win.protocol("WM_DELETE_WINDOW", close_popup)
 
-        # Di dalam open_cashier_dashboard, pastikan bahagian berikut ada dan betul:
-        def tree_main_double_click(event):
-            sel = tree_main.focus()
-            if not sel:
-                return
-            item_id = tree_main.item(sel, 'values')[0]
-            update_quantity_modal(item_id, tree_main)
+    def tree_main_double_click(event):
+        sel = tree_main.focus()
+        if not sel:
+            return
+        item_id = tree_main.item(sel, 'values')[0]
+        update_quantity_modal(item_id, tree_main)
 
-        tree_main.bind("<Double-1>", tree_main_double_click)
+    tree_main.bind("<Double-1>", tree_main_double_click)
 
-        # Fungsi update_quantity_modal (gantikan yang sedia ada)
-        def update_quantity_modal(item_id, tree):
-            selected_item = None
-            for item in tree.get_children():
-                if tree.item(item, 'values')[0] == item_id:
-                    selected_item = item
-                    break
-            if not selected_item:
-                messagebox.showwarning("Peringatan", "Item tidak ditemui!")
-                return
-            current_values = tree.item(selected_item, 'values')
-            product_name = current_values[1]
-            current_quantity = current_values[3]
-            current_price = float(current_values[2].replace("RM", "").strip())
+    def update_quantity_modal(item_id, tree):
+        global update_qty_popup_open
+        if update_qty_popup_open:
+            return
+        update_qty_popup_open = True
+        selected_item = None
+        for item in tree.get_children():
+            if tree.item(item, 'values')[0] == item_id:
+                selected_item = item
+                break
+        if not selected_item:
+            messagebox.showwarning("Peringatan", "Item tidak ditemui!")
+            update_qty_popup_open = False
+            return
+        current_values = tree.item(selected_item, 'values')
+        product_name = current_values[1]
+        current_quantity = current_values[3]
+        current_price = float(current_values[2].replace("RM", "").strip())
+        try:
+            is_weighable = (float(current_quantity) != int(float(current_quantity)))
+        except Exception:
+            is_weighable = False
+        modal = tk.Toplevel(tree.master)
+        modal.title(f"Kemaskini Kuantiti & Harga: {product_name}")
+        modal.geometry("320x420")
+        tk.Label(modal, text=f"Produk: {product_name}", font=("Arial", 13, "bold")).pack(pady=10)
+        tk.Label(modal, text="Kuantiti Baru:", font=("Arial", 13)).pack(pady=5)
+        quantity_entry = tk.Entry(modal, font=("Arial", 14), width=10)
+        quantity_entry.insert(0, str(current_quantity))
+        quantity_entry.pack(pady=5)
+        quantity_entry.focus()
+        tk.Label(modal, text="Harga Baru (RM):", font=("Arial", 13)).pack(pady=5)
+        price_entry = tk.Entry(modal, font=("Arial", 14), width=10)
+        price_entry.insert(0, f"{current_price:.2f}")
+        price_entry.pack(pady=5)
+        price_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(price_entry))
+
+        def submit_quantity():
             try:
-                is_weighable = (float(current_quantity) != int(float(current_quantity)))
-            except Exception:
-                is_weighable = False
-            modal = tk.Toplevel(tree.master)
-            modal.title(f"Kemaskini Kuantiti & Harga: {product_name}")
-            modal.geometry("320x420")
-            tk.Label(modal, text=f"Produk: {product_name}", font=("Arial", 13, "bold")).pack(pady=10)
-            tk.Label(modal, text="Kuantiti Baru:", font=("Arial", 13)).pack(pady=5)
-            quantity_entry = tk.Entry(modal, font=("Arial", 14), width=10)
-            quantity_entry.insert(0, str(current_quantity))
-            quantity_entry.pack(pady=5)
-            quantity_entry.focus()
-            tk.Label(modal, text="Harga Baru (RM):", font=("Arial", 13)).pack(pady=5)
-            price_entry = tk.Entry(modal, font=("Arial", 14), width=10)
-            price_entry.insert(0, f"{current_price:.2f}")
-            price_entry.pack(pady=5)
-            price_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(price_entry))
+                val_quantity = quantity_entry.get().strip()
+                if is_weighable:
+                    new_quantity = float(val_quantity)
+                    if new_quantity < 0.001:
+                        raise ValueError("Kuantiti mestilah lebih besar daripada 0")
+                else:
+                    if '.' in val_quantity:
+                        raise ValueError("Kuantiti untuk barang unit mesti nombor bulat")
+                    new_quantity = int(val_quantity)
+                    if new_quantity < 1:
+                        raise ValueError("Kuantiti mestilah lebih besar daripada 0")
+                val_price = price_entry.get().strip()
+                new_price = float(val_price)
+                if new_price <= 0:
+                    raise ValueError("Harga mesti lebih besar daripada 0")
+                new_total = new_price * new_quantity
+                qty_display = f"{new_quantity}" if not is_weighable else f"{new_quantity:.3f}"
+                tree.item(selected_item, values=(
+                    current_values[0], current_values[1],
+                    f"RM {new_price:.2f}", qty_display,
+                    f"RM {new_total:.2f}"
+                ))
+                update_totals()
+                modal.destroy()
+                global update_qty_popup_open
+                update_qty_popup_open = False
+                tree.selection_set(selected_item)
+                tree.focus(selected_item)
+            except ValueError as e:
+                messagebox.showerror("Input Tidak Sah", str(e), parent=modal)
+                quantity_entry.focus()
+            except Exception as e:
+                messagebox.showerror("Error", f"Ralat: {str(e)}", parent=modal)
+                quantity_entry.focus()
 
-            def submit_quantity():
-                try:
-                    val_quantity = quantity_entry.get().strip()
-                    if is_weighable:
-                        new_quantity = float(val_quantity)
-                        if new_quantity < 0.001:
-                            raise ValueError("Kuantiti mestilah > 0")
-                    else:
-                        if '.' in val_quantity:
-                            raise ValueError("Kuantiti untuk barang unit mesti nombor bulat")
-                        new_quantity = int(val_quantity)
-                        if new_quantity < 1:
-                            raise ValueError("Kuantiti mestilah > 0")
-                    
-                    val_price = price_entry.get().strip()
-                    new_price = float(val_price)
-                    if new_price <= 0:
-                        raise ValueError("Harga mesti lebih dari 0")
-
-                    new_total = new_price * new_quantity
-                    tree.item(selected_item, values=(
-                        current_values[0], current_values[1], f"RM {new_price:.2f}", new_quantity, f"RM {new_total:.2f}"
-                    ))
-                    update_totals()
-                    modal.destroy()
-                except ValueError as e:
-                    messagebox.showerror("Input Tidak Sah", str(e), parent=modal)
-                    quantity_entry.focus()
-                except Exception as e:
-                    messagebox.showerror("Error", f"Ralat: {str(e)}", parent=modal)
-                    quantity_entry.focus()
-
-            tk.Button(modal, text="Simpan", command=submit_quantity, width=12, bg="#32CD32", fg="white").pack(pady=10)
-            tk.Button(modal, text="Batal", command=modal.destroy, width=12).pack()
-            modal.bind('<Return>', lambda e: submit_quantity())
+        tk.Button(modal, text="Simpan", command=submit_quantity, width=12, bg="#32CD32", fg="white").pack(pady=10)
+        tk.Button(modal, text="Batal", command=lambda: [modal.destroy(), globals().update(update_qty_popup_open=False)], width=12).pack()
+        modal.bind('<Return>', lambda e: submit_quantity())
+        modal.protocol("WM_DELETE_WINDOW", lambda: [modal.destroy(), globals().update(update_qty_popup_open=False)])
+        modal.transient(dashboard)
+        modal.grab_set()
+        modal.wait_window()
 
     def load_low_stock_products():
         tree_low_stock.delete(*tree_low_stock.get_children())
@@ -1189,12 +1218,10 @@ def open_cashier_dashboard(user_id):
             if result.get("status") != "success":
                 messagebox.showerror("Error", result.get("message", "Gagal simpan transaksi"))
                 return
-
             if print_receipt_var.get():
                 print_receipt(items, total, amount_paid, payment_method)
             if open_drawer_var.get():
                 open_cash_drawer()
-
             messagebox.showinfo("Sukses", "Transaksi berjaya!")
             for item in tree_main.get_children():
                 tree_main.delete(item)
@@ -1220,7 +1247,10 @@ def open_cashier_dashboard(user_id):
         allowed_entries = {entry_barcode, entry_discount, entry_tax, entry_amount_paid}
         if not search_popup_open and not update_qty_popup_open and (focus_widget not in allowed_entries):
             try:
-                entry_barcode.focus_set()
+                if tree_main.get_children():
+                    tree_main.focus_set()
+                else:
+                    entry_barcode.focus_set()
             except Exception:
                 pass
         dashboard.after(20000, keep_focus_barcode)
@@ -1230,7 +1260,7 @@ def open_cashier_dashboard(user_id):
     dashboard.bind('<F2>', lambda e: complete_transaction())
     dashboard.bind('<F3>', lambda e: CTkVirtualKeyboard(dashboard))
     dashboard.bind('<F4>', lambda e: open_search_product())
-    dashboard.bind('<F5>', lambda e: update_quantity_modal())
+    dashboard.bind('<F5>', lambda e: update_quantity_modal(tree_main.item(tree_main.focus(), 'values')[0], tree_main) if tree_main.focus() else messagebox.showwarning("Peringatan", "Pilih item terlebih dahulu!"))
     dashboard.bind('<F6>', lambda e: open_cash_drawer())
     dashboard.bind('<F10>', lambda e: confirm_logout(dashboard, user_id))
 
