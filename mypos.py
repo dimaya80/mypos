@@ -19,8 +19,8 @@ try:
 except ImportError:
     win32print = None
 
-# API_URL = "http://127.0.0.1/api/api.php"
-API_URL = "https://gsand.xyz/api/api.php"
+API_URL = "http://127.0.0.1/api/api.php"
+# API_URL = "https://gsand.xyz/api/api.php"
 PRIMARY_COLOR = "#2B7A78"
 SELECTED_PRINTER_PORT = None
 
@@ -471,14 +471,13 @@ def show_shift_start_modal(user_id, root_window):
     win.wait_window()
 
 def open_cashier_dashboard(user_id):
+    global tree_main, item_counter, entry_barcode, search_popup_open, update_qty_popup_open, label_subtotal, label_total, label_change, discount_var, tax_var
     dashboard = tk.Tk()
     dashboard.title("Sistem Kasir")
     dashboard.geometry("1400x900")
     dashboard.attributes("-fullscreen", True)
 
-    global search_popup_open
     search_popup_open = False
-    global update_qty_popup_open
     update_qty_popup_open = False
 
     header_frame = ctk.CTkFrame(dashboard, height=54, fg_color="#205065")
@@ -535,8 +534,9 @@ def open_cashier_dashboard(user_id):
     style.theme_use("clam")
     style.configure("Cart.Treeview", font=("Arial", 18, "bold"), rowheight=38)
     style.configure("Cart.Treeview.Heading", font=("Arial", 18, "bold"))
-    columns = ("ID", "Nama Produk", "Harga", "Kuantiti", "Total")
+    columns = ("ID", "Nama Produk", "Harga", "Kuantiti", "Total", "Jenis Barcode")  # Added "Jenis Barcode"
     tree_main = ttk.Treeview(cart_frame, columns=columns, show="headings", style="Cart.Treeview")
+    print("tree_main initialized:", tree_main)  # Log untuk debug
     tree_main.heading("ID", text="ID")
     tree_main.column("ID", width=30)
     tree_main.heading("Nama Produk", text="Nama Produk")
@@ -547,6 +547,8 @@ def open_cashier_dashboard(user_id):
     tree_main.column("Kuantiti", width=50)
     tree_main.heading("Total", text="Total")
     tree_main.column("Total", width=50)
+    tree_main.heading("Jenis Barcode", text="Jenis Barcode")
+    tree_main.column("Jenis Barcode", width=100)
     tree_main.pack(fill="both", expand=True, padx=10, pady=10)
 
     sync_frame = ctk.CTkFrame(left, height=100, width=510, fg_color="gray20")
@@ -953,118 +955,166 @@ def open_cashier_dashboard(user_id):
             item_counter[0] += 1
         update_totals()
 
+    def do_search(*args):
+        global win, results_tree, search_var, products_data
+        query = search_var.get().strip()
+        print(f"Executing search with query: {query}")  # Log untuk debug
+        if len(query) < 2:
+            results_tree.delete(*results_tree.get_children())
+            return
+        try:
+            params = {'action': 'search_products', 'query': query, 'limit': 15}
+            response = requests.get(API_URL, params=params, timeout=10)
+            print(f"API response: {response.text}")  # Log respons API
+            data = response.json()
+            if not isinstance(data, dict) or 'data' not in data:
+                raise ValueError("Format response tidak valid")
+            products = data['data']
+            products_data.clear()
+            products_data.extend(products)
+            results_tree.delete(*results_tree.get_children())
+            for product in products:
+                price = float(product.get('price', 0))
+                results_tree.insert("", "end", values=(
+                    product.get("name", ""),
+                    f"RM {price:.2f}",
+                    product.get("stock", ""),
+                    product.get("barcode", "")
+                ))
+                print(f"Inserted product: {product}")  # Log setiap produk
+        except Exception as e:
+            print(f"Search error: {str(e)}")  # Log ralat
+            messagebox.showerror("Error", f"Gagal memuat hasil carian: {str(e)}", parent=win)
+
     def open_search_product():
-        global search_popup_open
+        global win, results_tree, search_var, products_data, search_popup_open, tree_main, item_counter, entry_barcode
         if search_popup_open:
             return
         search_popup_open = True
-        win = tk.Toplevel(dashboard)
-        win.title("Cari Produk")
-        win.geometry("700x500")
-        tk.Label(win, text="Cari:").pack(anchor="w")
-        search_var = tk.StringVar()
-        search_entry = tk.Entry(win, textvariable=search_var, font=("Arial", 14), width=30)
-        search_entry.pack(anchor="w", padx=10)
-        search_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(search_entry))
-        results_tree = ttk.Treeview(win, columns=("Nama", "Harga", "Stok", "Barcode"), show="headings", height=12)
-        for col in results_tree["columns"]:
-            results_tree.heading(col, text=col)
-            results_tree.column(col, width=150)
-        results_tree.pack(fill="both", expand=True, padx=10, pady=10)
         products_data = []
-        def do_search(*args):
-            query = search_var.get().strip()
-            if len(query) < 2:
-                results_tree.delete(*results_tree.get_children())
-                return
-            try:
-                params = {'action': 'search_products', 'query': query, 'limit': 50}
-                response = requests.get(API_URL, params=params, timeout=10)
-                data = response.json()
-                if not isinstance(data, dict) or 'data' not in data:
-                    raise ValueError("Format response tidak valid")
-                products = data['data']
-                products_data.clear()
-                products_data.extend(products)
-                results_tree.delete(*results_tree.get_children())
-                for product in products:
-                    results_tree.insert("", "end", values=(
-                        product.get("name", ""),
-                        f"RM {float(product.get('price', 0)):.2f}",
-                        product.get("stock", ""),
-                        product.get("barcode", "")
-                    ))
-            except Exception as e:
-                messagebox.showerror("Error", str(e), parent=win)
+        win = tk.Toplevel()
+        win.title("Cari Produk")
+        win.geometry("800x400")
+        search_var = tk.StringVar()
+        search_var.trace("w", do_search)
+        search_entry = tk.Entry(win, textvariable=search_var, font=("Arial", 15))
+        search_entry.pack(fill="x", padx=10, pady=10)
+        search_entry.focus()
+        search_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(search_entry))
+        cols = ("Nama", "Harga", "Stok", "Barcode")
+        results_tree = ttk.Treeview(win, columns=cols, show="headings")
+        results_tree.heading("Nama", text="Nama")
+        results_tree.heading("Harga", text="Harga")
+        results_tree.heading("Stok", text="Stok")
+        results_tree.heading("Barcode", text="Barcode")
+        results_tree.column("Nama", width=300)
+        results_tree.column("Harga", width=100)
+        results_tree.column("Stok", width=100)
+        results_tree.column("Barcode", width=200)
+        results_tree.pack(fill="both", expand=True, padx=10, pady=10)
+        
+        # Ensure single-click sets selection
+        def on_single_click(event):
+            item = results_tree.identify_row(event.y)
+            if item:
+                results_tree.selection_set(item)
+                results_tree.focus(item)
+                print(f"Single-click: {item}, Values: {results_tree.item(item, 'values')}")
+        
+        results_tree.bind("<Button-1>", on_single_click)
+        results_tree.bind("<Double-1>", lambda e: [print("Double-click detected"), add_selected_product()])
+        win.protocol("WM_DELETE_WINDOW", lambda: [win.destroy(), globals().update(search_popup_open=False)])
+        do_search()
+        # Pastikan item pertama dipilih secara automatik
+        if results_tree.get_children():
+            results_tree.selection_set(results_tree.get_children()[0])
+            results_tree.focus(results_tree.get_children()[0])
+
         def close_popup():
             global search_popup_open
             search_popup_open = False
             win.destroy()
             entry_barcode.focus_set()
+
         def add_selected_product():
-            selected = results_tree.focus()
-            if not selected:
-                messagebox.showwarning("Peringatan", "Pilih produk.", parent=win)
+            global tree_main, item_counter, products_data, win, search_popup_open
+            if not results_tree.focus():
+                messagebox.showwarning("Peringatan", "Pilih produk terlebih dahulu!", parent=win)
                 return
-            vals = results_tree.item(selected, "values")
-            product_name = vals[0]
-            price_str = vals[1].replace("RM", "").strip()
-            price = float(price_str)
-            is_weighable = 0
-            for product in products_data:
-                if product.get('name') == product_name:
-                    is_weighable = int(product.get('is_weighable', 0))
-                    break
-            if is_weighable:
-                berat_win = tk.Toplevel(win)
-                berat_win.title("Masukkan Berat (KG)")
-                berat_win.geometry("320x120")
-                tk.Label(berat_win, text=f"Masukkan berat (kg) untuk {product_name}:", font=("Arial", 13)).pack()
-                qty_entry = tk.Entry(berat_win, font=("Arial", 15), width=10)
-                qty_entry.pack(pady=7)
-                qty_entry.focus()
-                result = {'quantity': None}
-                def submit_qty():
-                    try:
-                        q = float(qty_entry.get())
-                        if q <= 0 or q > 999:
-                            raise ValueError
-                        result['quantity'] = q
-                        berat_win.destroy()
-                    except:
-                        messagebox.showerror("Input Salah", "Sila masukkan berat dalam KG (cth: 0.185)", parent=berat_win)
-                tk.Button(berat_win, text="OK", command=submit_qty, width=10).pack()
-                berat_win.transient()
-                berat_win.grab_set()
-                berat_win.wait_window()
-                quantity = result['quantity']
-                if not quantity:
+            try:
+                vals = results_tree.item(results_tree.focus(), "values")
+                print(f"Selected values: {vals}")
+                product_name = vals[0]
+                price_str = vals[1].replace("RM", "").strip()
+                price = float(price_str)
+                barcode = vals[3]
+                barcode_type = None
+                is_weighable = 0
+                for product in products_data:
+                    if product.get('name') == product_name:
+                        is_weighable = int(product.get('is_weighable', 0))
+                        barcode_type = product.get('barcode_type', 'unit')
+                        break
+                if not barcode_type:
+                    messagebox.showerror("Error", "Jenis barcode tidak ditemui untuk produk ini.", parent=win)
                     return
-            else:
-                quantity = 1
+                print(f"Adding product: {product_name}, Barcode: {barcode}, Type: {barcode_type}, Weighable: {is_weighable}")
+                if is_weighable:
+                    berat_win = tk.Toplevel(win)
+                    berat_win.title("Masukkan Berat (KG)")
+                    berat_win.geometry("320x120")
+                    tk.Label(berat_win, text=f"Masukkan berat (kg) untuk {product_name}:", font=("Arial", 13)).pack()
+                    qty_entry = tk.Entry(berat_win, font=("Arial", 15), width=10)
+                    qty_entry.pack(pady=7)
+                    qty_entry.focus()
+                    qty_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(qty_entry))
+                    result = {'quantity': None}
+                    def submit_qty():
+                        try:
+                            q = float(qty_entry.get())
+                            if q <= 0 or q > 999:
+                                raise ValueError
+                            result['quantity'] = q
+                            berat_win.destroy()
+                        except:
+                            messagebox.showerror("Input Salah", "Sila masukkan berat dalam KG (cth: 0.185)", parent=berat_win)
+                    tk.Button(berat_win, text="OK", command=submit_qty, width=10).pack()
+                    berat_win.transient(win)
+                    berat_win.grab_set()
+                    berat_win.wait_window()
+                    quantity = result['quantity']
+                    if not quantity:
+                        print("No quantity entered, cancelling")
+                        return
+                else:
+                    quantity = 1
                 for item in tree_main.get_children():
                     v = tree_main.item(item, 'values')
-                    if v[1] == product_name:
+                    if v[1] == product_name and v[5] == barcode_type:
                         old_qty = float(v[3])
-                        new_quantity = int(old_qty + 1)
+                        new_quantity = int(old_qty + 1) if not is_weighable else old_qty + quantity
                         new_total = new_quantity * price
-                        tree_main.item(item, values=(v[0], v[1], f"RM {price:.2f}", new_quantity, f"RM {new_total:.2f}"))
+                        qty_display = f"{new_quantity}" if not is_weighable else f"{new_quantity:.3f}"
+                        tree_main.item(item, values=(v[0], v[1], f"RM {price:.2f}", qty_display, f"RM {new_total:.2f}", barcode_type))
+                        print(f"Updated existing item: {product_name}, New Quantity: {new_quantity}, Total: {new_total}")
                         update_totals()
                         win.destroy()
                         highlight_last_cart_item()
+                        search_popup_open = False
                         return
-            idx = item_counter[0]
-            total = price * quantity
-            tree_main.insert("", "end", values=(idx, product_name, f"RM {price:.2f}", quantity, f"RM {total:.2f}"))
-            item_counter[0] += 1
-            update_totals()
-            win.destroy()
-            highlight_last_cart_item()
-            close_popup()
-        search_var.trace_add("write", do_search)
-        search_entry.bind("<Return>", do_search)
-        results_tree.bind("<Double-1>", lambda e: add_selected_product())
-        win.protocol("WM_DELETE_WINDOW", close_popup)
+                idx = item_counter[0]
+                total = price * quantity
+                qty_display = f"{quantity}" if not is_weighable else f"{quantity:.3f}"
+                tree_main.insert("", "end", values=(idx, product_name, f"RM {price:.2f}", qty_display, f"RM {total:.2f}", barcode_type))
+                print(f"Inserted new item: {product_name}, Quantity: {qty_display}, Total: {total}, Barcode Type: {barcode_type}")
+                item_counter[0] += 1
+                update_totals()
+                win.destroy()
+                highlight_last_cart_item()
+                search_popup_open = False
+            except Exception as e:
+                print(f"Error in add_selected_product: {str(e)}")
+                messagebox.showerror("Error", f"Gagal menambah produk ke troli: {str(e)}", parent=win)
 
     def tree_main_double_click(event):
         sel = tree_main.focus()
