@@ -2,6 +2,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import customtkinter as ctk
 import requests
+import uuid
 import serial
 import serial.tools.list_ports
 import time
@@ -19,6 +20,7 @@ try:
 except ImportError:
     win32print = None
 
+CASHIER_ID = "cashier_1"  # Tukar ke "cashier_2" untuk kaunter kedua
 API_URL = "http://127.0.0.1/api/api.php"
 # API_URL = "https://gsand.xyz/api/api.php"
 PRIMARY_COLOR = "#2B7A78"
@@ -34,19 +36,22 @@ def detect_thermal_printer_serial():
 def auto_sync(sync_queue, sync_label):
     while True:
         try:
-            sync_queue.put("🔄 Auto-sync bermula...\n")
-            r1 = requests.get("http://127.0.0.1/api/sync_push.php", timeout=60)
-            push_msg = f"➡️ Push Response: {r1.status_code} {r1.text.strip()}\n"
+            sync_queue.put(f"🔄 Auto-sync starting for {CASHIER_ID}...\n")
+            r1 = requests.get(f"http://127.0.0.1/api/sync_push.php?cashier_id={CASHIER_ID}", timeout=60)
+            push_msg = f"➡️ Push Response ({CASHIER_ID}): {r1.status_code} {r1.text.strip()}\n"
             sync_queue.put(push_msg)
-            r2 = requests.get("http://127.0.0.1/api/sync_pull.php", timeout=60)
-            pull_msg = f"⬅️ Pull Response: {r2.status_code} {r2.text.strip()}\n"
+            print(push_msg)
+
+            r2 = requests.get(f"http://127.0.0.1/api/sync_pull.php?cashier_id={CASHIER_ID}", timeout=60)
+            pull_msg = f"⬅️ Pull Response ({CASHIER_ID}): {r2.status_code} {r2.text.strip()}\n"
             sync_queue.put(pull_msg)
-            sync_queue.put("✅ Auto-sync selesai. Tunggu 60 saat...\n")
-            print("✅ Auto-sync selesai. Tunggu 60 saat...\n")
-        except requests.exceptions.RequestException as e:
-            error_msg = f"❌ Auto-sync error: {str(e)}\n"
+            print(pull_msg)
+
+            sync_queue.put(f"✅ Auto-sync completed for {CASHIER_ID}. Waiting 60 seconds...\n")
+        except Exception as e:
+            error_msg = f"❌ Auto-sync error for {CASHIER_ID}: {str(e)}\n"
             sync_queue.put(error_msg)
-            print("❌ Auto-sync error:", str(e))
+            print(error_msg)
         time.sleep(60)
 
 def update_sync_label(sync_queue, sync_label):
@@ -1251,14 +1256,17 @@ def open_cashier_dashboard(user_id):
                 if amount_paid < total:
                     messagebox.showwarning("Peringatan", "Jumlah bayar kurang dari total")
                     return
+            sale_id = str(uuid.uuid4())  # Hasilkan UUID unik
             transaction_data = {
                 "action": "save_transaction",
+                "sale_id": sale_id,
                 "items": items,
                 "total": total,
                 "discount": discount,
                 "tax": tax,
                 "amount_paid": amount_paid,
                 "user_id": user_id,
+                "cashier_id": CASHIER_ID,
                 "payment_method": payment_method,
                 "payment_method_id": payment_method_id,
                 "customer_info": customer_data if payment_method == "Hutang" else None
@@ -1285,6 +1293,7 @@ def open_cashier_dashboard(user_id):
             load_today_sales()
         except Exception as e:
             messagebox.showerror("Error", f"Gagal proses transaksi: {str(e)}")
+            print(f"Error in complete_transaction: {str(e)}")
 
     dashboard.after(700, lambda: CTkVirtualKeyboard(dashboard))
     entry_barcode.bind("<Return>", lambda e: scan_barcode(entry_barcode.get()))
