@@ -71,28 +71,34 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data['ac
 elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data['action'] == 'save_transaction') {
     $conn->begin_transaction();
     try {
-        $required_fields = ['user_id', 'items', 'total', 'discount', 'amount_paid', 'payment_method_id', 'payment_method'];
+        $required_fields = ['sale_id', 'user_id', 'items', 'total', 'discount', 'amount_paid', 'payment_method_id', 'payment_method', 'cashier_id'];
         foreach ($required_fields as $field) {
-            if (!isset($data[$field])) throw new Exception("Missing required field: $field");
+            if (!isset($data[$field]) || ($field == 'cashier_id' && empty($data[$field]))) {
+                throw new Exception("Missing or empty required field: $field");
+            }
         }
+        $sale_id = $conn->real_escape_string($data['sale_id']);
         $receipt_no = "INV" . date("Ymd") . str_pad(mt_rand(1, 9999), 4, '0', STR_PAD_LEFT);
         $payment_method_id = (int)$data['payment_method_id'];
         $payment_method_text = $conn->real_escape_string($data['payment_method']);
         $user_id = (int)$data['user_id'];
+        $cashier_id = $conn->real_escape_string($data['cashier_id']);
         $total = (float)$data['total'];
         $discount = (float)$data['discount'];
         $amount_paid = (float)$data['amount_paid'];
         $change = $amount_paid - $total;
+        $created_at = date('Y-m-d H:i:s');
 
-        $stmt = $conn->prepare("INSERT INTO sales (receipt_no, sale_date, user_id, total, discount, payment_received, change_given, payment_method_id) VALUES (?, NOW(), ?, ?, ?, ?, ?, ?)");
-        $stmt->bind_param("siddddi", $receipt_no, $user_id, $total, $discount, $amount_paid, $change, $payment_method_id);
+        // Insert into sales table
+        $stmt = $conn->prepare("INSERT INTO sales (id, receipt_no, sale_date, user_id, total, discount, payment_received, change_given, payment_method_id, cashier_id, created_at, synced) VALUES (?, ?, NOW(), ?, ?, ?, ?, ?, ?, ?, ?, 0)");
+        $stmt->bind_param("ssiddddiss", $sale_id, $receipt_no, $user_id, $total, $discount, $amount_paid, $change, $payment_method_id, $cashier_id, $created_at);
         $stmt->execute();
-        $sale_id = $conn->insert_id;
         $stmt->close();
 
+        // Insert into sales_items table
         foreach ($data['items'] as $item) {
             $item_name = $conn->real_escape_string($item['name']);
-            $quantity = (float)$item['quantity']; // BENARKAN FLOAT UNTUK TIMBANG
+            $quantity = (float)$item['quantity'];
             $unit_price = round((float)$item['price'], 4);
             $total_price = round((float)$item['total'], 4);
 
@@ -105,8 +111,9 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data
             $stmt->close();
 
             if ($item_id) {
-                $stmt = $conn->prepare("INSERT INTO sales_items (sale_id, item_id, quantity, unit_price, total_price) VALUES (?, ?, ?, ?, ?)");
-                $stmt->bind_param("iiddd", $sale_id, $item_id, $quantity, $unit_price, $total_price);
+                $item_sale_id = $conn->real_escape_string($sale_id . "-" . $item_id);
+                $stmt = $conn->prepare("INSERT INTO sales_items (id, sale_id, item_id, quantity, unit_price, total_price, cashier_id, created_at, synced) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)");
+                $stmt->bind_param("ssiddsss", $item_sale_id, $sale_id, $item_id, $quantity, $unit_price, $total_price, $cashier_id, $created_at);
                 $stmt->execute();
                 $stmt->close();
             } else {
@@ -114,7 +121,7 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data
             }
         }
 
-        // Option: Simpan customer_credit jika payment_method_id == 2 dan ada customer_info
+        // Option: Save customer_credit if payment_method_id == 2 and customer_info exists
         if ($payment_method_id == 2 && isset($data['customer_info'])) {
             $customer_info = $data['customer_info'];
             $customer_name = $conn->real_escape_string($customer_info['name'] ?? '');
@@ -126,7 +133,7 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data
             $stmt->close();
         }
 
-        // Update shift cash_end jika tunai
+        // Update shift cash_end if cash payment
         if ($payment_method_id == 1) {
             $shift_query = "SELECT id, cash_end FROM shifts WHERE user_id = ? AND shift_end IS NULL ORDER BY shift_start DESC LIMIT 1";
             $shift_stmt = $conn->prepare($shift_query);
@@ -165,6 +172,7 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data
             'status' => 'error',
             'message' => 'Transaction failed: ' . $e->getMessage()
         ]);
+        error_log("Transaction failed: " . $e->getMessage());
     }
 }
 
@@ -334,23 +342,28 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && !isset($_GET['action']) && isset
 // SEARCH PRODUCTS
 elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && (isset($_GET['search']) || (isset($_GET['action']) && $_GET['action'] == 'search_products'))) {
     $search_term = isset($_GET['search']) ? $_GET['search'] : (isset($_GET['query']) ? $_GET['query'] : '');
-    $search = "%" . $conn->real_escape_string($search_term) . "%";
+    $search = "%" . $conn->real_escape_string(strtolower($search_term)) . "%";
     $limit = isset($_GET['limit']) ? (int)$_GET['limit'] : 50;
 
     $sql = "
         SELECT 
-            i.id, 
-            i.item_name as name, 
-            sp.supplier_price_unit as price,
-            i.barcode_per_unit as barcode,
+            i.id,
+            i.item_name as name,
+            MAX(sp.supplier_price_unit) as price_unit,
+            MAX(sp.supplier_price_pack) as price_pack,
+            MAX(sp.supplier_price_box) as price_box,
+            i.barcode_per_unit,
+            i.barcode_per_pack,
+            i.barcode_per_box,
             (COALESCE(SUM(sp.stock_per_unit), 0) - 
              COALESCE((SELECT SUM(si.quantity) 
                       FROM sales_items si
                       JOIN sales s ON si.sale_id = s.id
                       WHERE si.item_id = i.id), 0)) as stock,
-            i.is_weighable,
-            i.unit_of_measurement,
-            'unit' as barcode_type
+            MAX(i.is_weighable) as is_weighable,
+            MAX(i.unit_of_measurement) as unit_of_measurement,
+            MAX(sp.unit_per_pack) as unit_per_pack,
+            MAX(sp.pack_per_box) as pack_per_box
         FROM items i
         LEFT JOIN (
             SELECT item_id, MAX(date_keyin) as max_date
@@ -360,65 +373,15 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && (isset($_GET['search']) || (isse
         LEFT JOIN supplier_prices sp ON 
             sp.item_id = latest_date.item_id AND 
             sp.date_keyin = latest_date.max_date
-        WHERE i.item_name LIKE ? AND i.barcode_per_unit IS NOT NULL
-        GROUP BY i.id
-        UNION
-        SELECT 
-            i.id, 
-            CONCAT(i.item_name, ' (Pek)') as name, 
-            sp.supplier_price_pack as price,
-            i.barcode_per_pack as barcode,
-            (COALESCE(SUM(sp.stock_per_unit) / sp.unit_per_pack, 0) - 
-             COALESCE((SELECT SUM(si.quantity) 
-                      FROM sales_items si
-                      JOIN sales s ON si.sale_id = s.id
-                      WHERE si.item_id = i.id), 0)) as stock,
-            i.is_weighable,
-            i.unit_of_measurement,
-            'pack' as barcode_type
-        FROM items i
-        LEFT JOIN (
-            SELECT item_id, MAX(date_keyin) as max_date
-            FROM supplier_prices
-            GROUP BY item_id
-        ) latest_date ON i.id = latest_date.item_id
-        LEFT JOIN supplier_prices sp ON 
-            sp.item_id = latest_date.item_id AND 
-            sp.date_keyin = latest_date.max_date
-        WHERE i.item_name LIKE ? AND i.barcode_per_pack IS NOT NULL
-        GROUP BY i.id
-        UNION
-        SELECT 
-            i.id, 
-            CONCAT(i.item_name, ' (Kotak)') as name, 
-            sp.supplier_price_box as price,
-            i.barcode_per_box as barcode,
-            (COALESCE(SUM(sp.stock_per_unit) / (sp.unit_per_pack * sp.pack_per_box), 0) - 
-             COALESCE((SELECT SUM(si.quantity) 
-                      FROM sales_items si
-                      JOIN sales s ON si.sale_id = s.id
-                      WHERE si.item_id = i.id), 0)) as stock,
-            i.is_weighable,
-            i.unit_of_measurement,
-            'box' as barcode_type
-        FROM items i
-        LEFT JOIN (
-            SELECT item_id, MAX(date_keyin) as max_date
-            FROM supplier_prices
-            GROUP BY item_id
-        ) latest_date ON i.id = latest_date.item_id
-        LEFT JOIN supplier_prices sp ON 
-            sp.item_id = latest_date.item_id AND 
-            sp.date_keyin = latest_date.max_date
-        WHERE i.item_name LIKE ? AND i.barcode_per_box IS NOT NULL
-        GROUP BY i.id
+        WHERE LOWER(i.item_name) LIKE ?
+        GROUP BY i.id, i.item_name, i.barcode_per_unit, i.barcode_per_pack, i.barcode_per_box
         ORDER BY 
             CASE 
-                WHEN name LIKE ? THEN 0
-                WHEN name LIKE ? THEN 1
+                WHEN LOWER(i.item_name) LIKE ? THEN 0
+                WHEN LOWER(i.item_name) LIKE ? THEN 1
                 ELSE 2
             END,
-            name
+            i.item_name
         LIMIT ?";
 
     $stmt = $conn->prepare($sql);
@@ -428,9 +391,9 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && (isset($_GET['search']) || (isse
         exit;
     }
 
-    $exact_match = $conn->real_escape_string($search_term) . "%";
-    $starts_with = $conn->real_escape_string($search_term) . "%";
-    $stmt->bind_param("sssssi", $search, $search, $search, $exact_match, $starts_with, $limit);
+    $exact_match = $conn->real_escape_string(strtolower($search_term)) . "%";
+    $starts_with = $conn->real_escape_string(strtolower($search_term)) . "%";
+    $stmt->bind_param("sssi", $search, $exact_match, $starts_with, $limit);
 
     if (!$stmt->execute()) {
         echo json_encode(['status' => 'error', 'message' => 'Execute failed: ' . $stmt->error]);
@@ -439,19 +402,44 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && (isset($_GET['search']) || (isse
     }
 
     $result = $stmt->get_result();
-
     $products = [];
     while ($row = $result->fetch_assoc()) {
-        $products[] = [
-            'id' => (int)$row['id'],
-            'name' => $row['name'],
-            'price' => (float)$row['price'],
-            'barcode' => $row['barcode'],
-            'stock' => (int)$row['stock'],
-            'is_weighable' => isset($row['is_weighable']) ? (int)$row['is_weighable'] : 0,
-            'unit_of_measurement' => $row['unit_of_measurement'] ?? '',
-            'barcode_type' => $row['barcode_type']
-        ];
+        if ($row['barcode_per_unit'] && $row['price_unit'] > 0) {
+            $products[] = [
+                'id' => (int)$row['id'],
+                'name' => $row['name'],
+                'price' => (float)$row['price_unit'],
+                'barcode' => $row['barcode_per_unit'],
+                'stock' => (int)$row['stock'],
+                'is_weighable' => (int)$row['is_weighable'],
+                'unit_of_measurement' => $row['unit_of_measurement'] ?? '',
+                'barcode_type' => 'unit'
+            ];
+        }
+        if ($row['barcode_per_pack'] && $row['price_pack'] > 0) {
+            $products[] = [
+                'id' => (int)$row['id'],
+                'name' => $row['name'] . ' (Pek)',
+                'price' => (float)$row['price_pack'],
+                'barcode' => $row['barcode_per_pack'],
+                'stock' => (int)($row['stock'] / ($row['unit_per_pack'] ?? 1)),
+                'is_weighable' => (int)$row['is_weighable'],
+                'unit_of_measurement' => $row['unit_of_measurement'] ?? '',
+                'barcode_type' => 'pack'
+            ];
+        }
+        if ($row['barcode_per_box'] && $row['price_box'] > 0) {
+            $products[] = [
+                'id' => (int)$row['id'],
+                'name' => $row['name'] . ' (Kotak)',
+                'price' => (float)$row['price_box'],
+                'barcode' => $row['barcode_per_box'],
+                'stock' => (int)($row['stock'] / (($row['unit_per_pack'] ?? 1) * ($row['pack_per_box'] ?? 1))),
+                'is_weighable' => (int)$row['is_weighable'],
+                'unit_of_measurement' => $row['unit_of_measurement'] ?? '',
+                'barcode_type' => 'box'
+            ];
+        }
     }
 
     echo json_encode([
@@ -747,7 +735,7 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'GET' && isset($_GET['action']) && $_GET[
 
 // RESTOCK PRODUCT
 elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data['action'] == 'restock_product') {
-    $required_fields = ['item_id', 'quantity', 'supplier_id'];
+    $required_fields = ['item_id', 'quantity', 'supplier_id', 'cashier_id'];
     foreach ($required_fields as $field) {
         if (!isset($data[$field])) {
             echo json_encode(['status' => 'error', 'message' => "$field is required"]);
@@ -759,6 +747,7 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data
     $item_id = (int)$data['item_id'];
     $quantity = (int)$data['quantity'];
     $supplier_id = (int)$data['supplier_id'];
+    $cashier_id = $conn->real_escape_string($data['cashier_id']);
     $price_cost = isset($data['price_cost']) ? (float)$data['price_cost'] : 0;
     $invoice_no = isset($data['invoice_no']) ? $conn->real_escape_string($data['invoice_no']) : '';
     $notes = isset($data['notes']) ? $conn->real_escape_string($data['notes']) : '';
@@ -770,22 +759,11 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data
         $sql = "INSERT INTO supplier_prices (
                   item_id, supplier_id, stock_per_unit, 
                   supplier_price_unit, price_cost,
-                  invoice_no, notes, date_keyin, user_id
-               ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?)";
+                  invoice_no, notes, date_keyin, user_id, cashier_id, synced
+               ) VALUES (?, ?, ?, ?, ?, ?, ?, NOW(), ?, ?, 0)";
         $stmt = $conn->prepare($sql);
-        if (!$stmt) {
-            throw new Exception("Prepare failed for supplier_prices: " . $conn->error);
-        }
-        $stmt->bind_param(
-            "iiiddssi", 
-            $item_id, $supplier_id, $quantity,
-            $price_cost, $price_cost,
-            $invoice_no, $notes, $user_id
-        );
-
-        if (!$stmt->execute()) {
-            throw new Exception("Failed to insert supplier price: " . $stmt->error);
-        }
+        $stmt->bind_param("iiiddssis", $item_id, $supplier_id, $quantity, $price_cost, $price_cost, $invoice_no, $notes, $user_id, $cashier_id);
+        $stmt->execute();
         $stmt->close();
 
         $sql = "INSERT INTO stock_history (
@@ -835,7 +813,7 @@ elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($data['action']) && $data
             ]
         ]);
 
-    } catch (Exception $e) {
+	} catch (Exception $e) {
         $conn->rollback();
         echo json_encode([
             'status' => 'error',
