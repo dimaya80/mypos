@@ -2,12 +2,19 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import customtkinter as ctk
 import requests
+import uuid
 import serial
 import serial.tools.list_ports
 import time
 import threading
 from datetime import datetime
 import queue
+import json
+import os
+
+# Tetapkan tema secara global
+ctk.set_appearance_mode("dark")
+ctk.set_default_color_theme("green")
 
 # === PATCH: Printer Support (USB/Serial) ===
 try:
@@ -15,7 +22,24 @@ try:
 except ImportError:
     win32print = None
 
-API_URL = "http://127.0.0.1/api/api.php"
+# Baca fail konfigurasi
+def load_config():
+    config_file = 'config.json'
+    if not os.path.exists(config_file):
+        raise FileNotFoundError(f"Fail konfigurasi {config_file} tidak wujud!")
+    with open(config_file, 'r') as f:
+        return json.load(f)
+
+try:
+    config = load_config()
+    CASHIER_ID = config['CASHIER_ID']
+    API_URL = config['API_URL']
+    SYNC_PUSH_URL = f"{config['SYNC_PUSH_URL']}?cashier_id={CASHIER_ID}"
+    SYNC_PULL_URL = f"{config['SYNC_PULL_URL']}?cashier_id={CASHIER_ID}"
+except Exception as e:
+    messagebox.showerror("Ralat Konfigurasi", f"Gagal memuatkan konfigurasi: {str(e)}")
+    raise SystemExit(f"Ralat konfigurasi: {str(e)}")
+
 PRIMARY_COLOR = "#2B7A78"
 SELECTED_PRINTER_PORT = None
 
@@ -26,21 +50,47 @@ def detect_thermal_printer_serial():
             return port.device
     return None
 
-def auto_sync(sync_queue, sync_label):
+def auto_sync(sync_queue, sync_label, root):
     while True:
-        sync_label.configure(text="")  # Kosongkan label terlebih dahulu
         try:
-            sync_label.configure(text=sync_label.cget("text") + "🔄 Auto-sync bermula...\n")
-            r1 = requests.get("http://127.0.0.1/api/sync_push.php", timeout=60)
-            sync_label.configure(text=sync_label.cget("text") + f"➡️ Push Response: {r1.status_code} {r1.text.strip()}\n")
-            r2 = requests.get("http://127.0.0.1/api/sync_pull.php", timeout=60)
-            sync_label.configure(text=sync_label.cget("text") + f"⬅️ Pull Response: {r2.status_code} {r2.text.strip()}\n")
-            sync_label.configure(text=sync_label.cget("text") + "✅ Auto-sync selesai. Tunggu 60 saat...\n")
-            print("✅ Auto-sync selesai. Tunggu 60 saat...\n")
-        except requests.exceptions.RequestException as e:
-            sync_label.configure(text=sync_label.cget("text") + f"❌ Auto-sync error: {str(e)}\n")
-            print("❌ Auto-sync error:", str(e))
-        time.sleep(60)
+            sync_queue.put(f"🔄 Auto-sync starting for {CASHIER_ID}...\n")
+            r1 = requests.get(SYNC_PUSH_URL, timeout=30)
+            push_msg = f"➡️ Push Response ({CASHIER_ID}): {r1.status_code} {r1.text.strip()}\n"
+            sync_queue.put(push_msg)
+            print(push_msg)
+
+            r2 = requests.get(SYNC_PULL_URL, timeout=30)
+            pull_msg = f"⬅️ Pull Response ({CASHIER_ID}): {r2.status_code} {r2.text.strip()}\n"
+            sync_queue.put(push_msg)
+            print(pull_msg)
+
+            sync_queue.put(f"✅ Auto-sync completed for {CASHIER_ID}. Waiting 30 seconds...\n")
+        except Exception as e:
+            error_msg = f"❌ Auto-sync error for {CASHIER_ID}: {str(e)}\n"
+            sync_queue.put(error_msg)
+            print(error_msg)
+        time.sleep(30)
+
+def update_sync_label(sync_queue, sync_label, root):
+    current_text = ""
+    def update_label_in_main_thread(text, color):
+        try:
+            root.after(0, lambda: sync_label.configure(text=text, text_color=color))
+        except Exception as e:
+            print(f"Error scheduling UI update: {e}")
+
+    while True:
+        try:
+            message = sync_queue.get(timeout=1)
+            current_text = (current_text + message)[-1000:]  # Hadkan panjang teks
+            print(f"Updating sync label: {current_text}")
+            update_label_in_main_thread(current_text, "white")
+            sync_queue.task_done()
+        except queue.Empty:
+            continue
+        except Exception as e:
+            print(f"Error updating sync label: {e}")
+            update_label_in_main_thread("Sync status: Error", "red")
 
 def print_usb_receipt(receipt_text, printer_name=None):
     if not win32print:
@@ -222,7 +272,7 @@ def print_receipt(items, total, amount_paid, payment_method, customer_info=None,
             quantity = float(item['quantity'])
             price = float(item['price'])
             item_total = float(item['total'])
-            qty_str = f"{quantity:.3f}" if quantity != int(quantity) else f"{int(quantity)}"
+            qty_str = f"{int(quantity)}" if quantity == int(quantity) else f"{quantity:.3f}"
             price_str = f"{price:.2f}"
             total_str = f"{item_total:.2f}"
             receipt_lines.append(f"{name:<20}{qty_str:>6}{price_str:>10}{total_str:>12}\n")
@@ -251,11 +301,12 @@ def print_receipt(items, total, amount_paid, payment_method, customer_info=None,
             "\x1B\x61\x01",
             f"\x1D\x68\x50\x1D\x77\x02\x1D\x6B\x49{chr(len(receipt_no))}{receipt_no}\n",
             "\x1B\x61\x00",
-            "\n\n\n"
+            "\n\n\n",
+            "\x1D\x56\x41\x03"
         ])
 
         # Tambah perintah membuka cash drawer (ESC/POS)
-        receipt_lines.append("\x1B\x70\x00\x19\xFA")  # Perintah standard untuk membuka cash drawer
+        receipt_lines.append("\x1B\x70\x00\x19\xFA")
 
         receipt_text = "".join(receipt_lines)
         port = SELECTED_PRINTER_PORT or detect_thermal_printer_serial()
@@ -301,16 +352,14 @@ def open_cash_drawer():
         # Gunakan printer default atau yang dipilih
         printer_name = win32print.GetDefaultPrinter() if not SELECTED_PRINTER_PORT else SELECTED_PRINTER_PORT
         hprinter = win32print.OpenPrinter(printer_name)
-
         try:
             # Mulakan dokumen kosong untuk menghantar perintah cash drawer
             hjob = win32print.StartDocPrinter(hprinter, 1, ("Cash Drawer Command", None, "RAW"))
             win32print.StartPagePrinter(hprinter)
 
             # Perintah ESC/POS untuk membuka cash drawer
-            cash_drawer_command = b'\x1B\x70\x00\x19\xFA'  # Drawer 1, 25ms on, 250ms off
+            cash_drawer_command = b'\x1B\x70\x00\x19\xFA'
             win32print.WritePrinter(hprinter, cash_drawer_command)
-
             win32print.EndPagePrinter(hprinter)
             win32print.EndDocPrinter(hprinter)
             messagebox.showinfo("Berjaya", "Laci wang berjaya dibuka!")
@@ -343,7 +392,7 @@ def show_login_window():
     screen_width = root.winfo_screenwidth()
     screen_height = root.winfo_screenheight()
 
-    # Tetapkan saiz tetingkap login (400x400 seperti asal)
+    # Tetapkan saiz tetingkap login
     window_width = 400
     window_height = 400
 
@@ -360,7 +409,10 @@ def show_login_window():
     frame = ctk.CTkFrame(root)
     frame.pack(pady=50, padx=20, fill="both", expand=True)
 
+    # Tajuk tanpa gambar
     ctk.CTkLabel(frame, text="KAK NAH KEDAI RUNCIT", font=("Arial", 20, "bold")).pack(pady=20)
+
+    # Medan input
     ctk.CTkLabel(frame, text="Username:").pack()
     entry_username = ctk.CTkEntry(frame)
     entry_username.pack()
@@ -375,7 +427,6 @@ def show_login_window():
         if not username or not password:
             messagebox.showwarning("Peringatan", "Username dan password wajib diisi!", parent=root)
             return
-
         try:
             response = requests.post(API_URL, json={"action": "login", "username": username, "password": password}, timeout=5)
             result = response.json()
@@ -388,6 +439,7 @@ def show_login_window():
         except Exception as e:
             messagebox.showerror("Error", f"Gagal login: {str(e)}", parent=root)
 
+    # Butang log masuk
     ctk.CTkButton(frame, text="Login", command=login, fg_color=PRIMARY_COLOR).pack(pady=20)
     root.bind('<Return>', lambda e: login())
     root.mainloop()
@@ -395,73 +447,94 @@ def show_login_window():
 def check_or_start_shift(user_id, root_window):
     global shift_popup_open
     if shift_popup_open:
+        print("Shift popup already open, skipping check_or_start_shift")
         return
-
     try:
-        resp = requests.get(f"{API_URL}?action=check_shift&user_id={user_id}", timeout=5)
+        print(f"Memeriksa syif untuk user_id: {user_id}, cashier_id: {CASHIER_ID}")
+        resp = requests.get(API_URL, params={"action": "check_shift", "user_id": user_id, "cashier_id": CASHIER_ID}, timeout=10)
         data = resp.json()
-        if data.get('status') == 'success' and data.get('has_shift'):
+        print(f"Respons API check_shift: {data}")
+        if data.get("status") == "success" and data.get("has_shift"):
+            print(f"Syif aktif dikesan untuk user_id: {user_id}, cashier_id: {CASHIER_ID}")
             root_window.destroy()
-            open_cashier_dashboard(user_id)
+            open_cashier_dashboard(user_id, CASHIER_ID)
         else:
+            print(f"Tiada syif aktif, memaparkan modal mula syif")
             show_shift_start_modal(user_id, root_window)
     except Exception as e:
+        print(f"Ralat semasa memeriksa syif: {e}")
         messagebox.showerror("Ralat", f"Gagal semak shift: {str(e)}", parent=root_window)
         root_window.destroy()
 
-def show_shift_start_modal(user_id, root_window):
-    global shift_popup_open
-    if shift_popup_open:
-        return
-    shift_popup_open = True
-
-    win = ctk.CTkToplevel(master=root_window)
-    win.title("Mula Shift")
-    win.geometry("350x250")
-    win.attributes('-topmost', True)
-
-    ctk.CTkLabel(win, text="Shift belum bermula!", font=("Arial", 16, "bold")).pack(pady=10)
-    ctk.CTkLabel(win, text="Masukkan Cash Awal (RM):").pack()
-    entry_cash = ctk.CTkEntry(win)
-    entry_cash.pack(pady=10)
-    entry_cash.focus()
-
-    def submit_start_shift():
-        try:
-            cash_awal = float(entry_cash.get())
-            res = requests.post(API_URL, json={"action": "start_shift", "user_id": user_id, "cash_start": cash_awal}, timeout=10)
-            data2 = res.json()
-            if data2.get("status") == "success":
-                messagebox.showinfo("Berjaya", "Shift bermula!", parent=win)
-                win.destroy()
-                root_window.destroy()
-                shift_popup_open = False
-                open_cashier_dashboard(user_id)
-            else:
-                raise Exception(data2.get("message", "Gagal mula shift!"))
-        except Exception as e:
-            messagebox.showerror("Ralat", f"Gagal mula shift: {e}", parent=win)
-
-    def reset_shift_flag():
+    def show_shift_start_modal(user_id, root_window):
         global shift_popup_open
-        shift_popup_open = False
+        if shift_popup_open:
+            print("Shift popup already open, skipping show_shift_start_modal")
+            return
+        shift_popup_open = True
+        win = ctk.CTkToplevel(master=root_window)
+        win.title("Mula Shift")
+        win.geometry("350x250")
+        win.attributes('-topmost', True)
+        ctk.CTkLabel(win, text="Shift belum bermula!", font=("Arial", 16, "bold")).pack(pady=10)
+        ctk.CTkLabel(win, text="Masukkan Cash Awal (RM):").pack()
+        entry_cash = ctk.CTkEntry(win)
+        entry_cash.pack(pady=10)
+        entry_cash.focus()
 
-    ctk.CTkButton(win, text="Mula Shift", command=submit_start_shift, fg_color="#32CD32").pack(pady=10)
-    ctk.CTkButton(win, text="Batal", command=lambda: [win.destroy(), reset_shift_flag()]).pack(pady=5)
-    win.transient(root_window)
-    win.grab_set()
-    win.protocol("WM_DELETE_WINDOW", lambda: [win.destroy(), reset_shift_flag()])
-    win.wait_window()
+        def submit_start_shift():
+            global shift_popup_open
+            try:
+                cash_awal = float(entry_cash.get())
+                print(f"Memulakan syif dengan user_id: {user_id}, cashier_id: {CASHIER_ID}, cash_start: {cash_awal}")
+                res = requests.post(API_URL, json={
+                    "action": "start_shift",
+                    "user_id": user_id,
+                    "cash_start": cash_awal,
+                    "cashier_id": CASHIER_ID
+                }, timeout=10)
+                data2 = res.json()
+                print(f"Respons API start_shift: {data2}")
+                if data2.get("status") == "success":
+                    messagebox.showinfo("Berjaya", "Shift bermula!", parent=win)
+                    win.destroy()
+                    shift_popup_open = False
+                    print(f"Memanggil open_cashier_dashboard dengan user_id: {user_id}, cashier_id: {CASHIER_ID}")
+                    open_cashier_dashboard(user_id, CASHIER_ID)
+                    root_window.destroy()
+                elif data2.get("message", "").startswith("Syif sudah bermula"):
+                    print(f"Syif sudah bermula untuk cashier_id: {CASHIER_ID}")
+                    messagebox.showinfo("Maklumat", "Syif sudah bermula. Memuatkan papan pemuka...", parent=win)
+                    win.destroy()
+                    shift_popup_open = False
+                    open_cashier_dashboard(user_id, CASHIER_ID)
+                    root_window.destroy()
+                else:
+                    print(f"Ralat API: {data2.get('message', 'Tiada mesej ralat')}")
+                    raise Exception(data2.get("message", "Gagal mula shift!"))
+            except Exception as e:
+                print(f"Ralat semasa memulakan syif: {e}")
+                messagebox.showerror("Ralat", f"Gagal mula shift: {e}", parent=win)
 
-def open_cashier_dashboard(user_id):
+        def reset_shift_flag():
+            global shift_popup_open
+            shift_popup_open = False
+
+        ctk.CTkButton(win, text="Mula Shift", command=submit_start_shift, fg_color="#32CD32").pack(pady=10)
+        ctk.CTkButton(win, text="Batal", command=lambda: [win.destroy(), reset_shift_flag()]).pack(pady=5)
+        win.transient(root_window)
+        win.grab_set()
+        win.protocol("WM_DELETE_WINDOW", lambda: [win.destroy(), reset_shift_flag()])
+        win.wait_window()
+
+def open_cashier_dashboard(user_id, cashier_id):
+    global tree_main, item_counter, entry_barcode, search_popup_open, update_qty_popup_open, label_subtotal, label_total, label_change, discount_var, tax_var
     dashboard = tk.Tk()
     dashboard.title("Sistem Kasir")
-    dashboard.geometry("1600x900")
+    dashboard.geometry("1400x900")
     dashboard.attributes("-fullscreen", True)
 
-    global search_popup_open
     search_popup_open = False
-    global update_qty_popup_open
     update_qty_popup_open = False
 
     header_frame = ctk.CTkFrame(dashboard, height=54, fg_color="#205065")
@@ -518,8 +591,9 @@ def open_cashier_dashboard(user_id):
     style.theme_use("clam")
     style.configure("Cart.Treeview", font=("Arial", 18, "bold"), rowheight=38)
     style.configure("Cart.Treeview.Heading", font=("Arial", 18, "bold"))
-    columns = ("ID", "Nama Produk", "Harga", "Kuantiti", "Total")
+    columns = ("ID", "Nama Produk", "Harga", "Kuantiti", "Total", "Jenis Barcode")
     tree_main = ttk.Treeview(cart_frame, columns=columns, show="headings", style="Cart.Treeview")
+    print("tree_main initialized:", tree_main)
     tree_main.heading("ID", text="ID")
     tree_main.column("ID", width=30)
     tree_main.heading("Nama Produk", text="Nama Produk")
@@ -530,15 +604,30 @@ def open_cashier_dashboard(user_id):
     tree_main.column("Kuantiti", width=50)
     tree_main.heading("Total", text="Total")
     tree_main.column("Total", width=50)
+    tree_main.heading("Jenis Barcode", text="Jenis Barcode")
+    tree_main.column("Jenis Barcode", width=100)
     tree_main.pack(fill="both", expand=True, padx=10, pady=10)
 
-    sync_frame = ctk.CTkFrame(left, height=150)  # Tingkatkan ketinggian frame menjadi 150
+    sync_frame = ctk.CTkFrame(left, height=100, width=510, fg_color="gray20")
     sync_frame.pack(fill="x", padx=10, pady=5)
-    sync_label = ctk.CTkLabel(sync_frame, text="", font=("Arial", 12), wraplength=500, justify="left")
-    sync_label.pack(side="left", padx=5, pady=5)
+    canvas = tk.Canvas(sync_frame, height=100, width=510, bg="gray20")
+    scrollbar = ttk.Scrollbar(sync_frame, orient="vertical", command=canvas.yview)
+    sync_label = ctk.CTkLabel(canvas, text="", font=("Arial", 12), wraplength=480, justify="left", text_color="white")
+    canvas.configure(yscrollcommand=scrollbar.set)
+    canvas.create_window((0, 0), window=sync_label, anchor="nw")
+
+    def configure_scrollregion(event):
+        canvas.configure(scrollregion=canvas.bbox("all"))
+
+    sync_label.bind("<Configure>", configure_scrollregion)
+    scrollbar.pack(side="right", fill="y")
+    canvas.pack(side="left", fill="both", expand=True)
+
     sync_queue = queue.Queue()
     sync_thread = threading.Thread(target=auto_sync, args=(sync_queue, sync_label), daemon=True)
+    update_thread = threading.Thread(target=update_sync_label, args=(sync_queue, sync_label), daemon=True)
     sync_thread.start()
+    update_thread.start()
 
     sales_frame = tk.Frame(notebook)
     notebook.add(sales_frame, text="Jualan Hari Ini")
@@ -549,7 +638,7 @@ def open_cashier_dashboard(user_id):
         sales_tree.column(col, width=110)
     sales_tree.pack(fill="both", expand=True, padx=10, pady=10)
     sales_btn_frame = tk.Frame(sales_frame)
-    sales_btn_frame.pack(fill="x", padx=10, pady=(6,2))
+    sales_btn_frame.pack(fill="x", padx=10, pady=(6, 2))
 
     def load_today_sales():
         sales_tree.delete(*sales_tree.get_children())
@@ -561,8 +650,10 @@ def open_cashier_dashboard(user_id):
                 for sale in data['data']:
                     sales_tree.insert("", "end", values=(
                         sale['no'], sale['receipt_no'], sale['sale_time'],
-                        f"RM {float(sale['total']):.2f}", f"RM {float(sale['discount']):.2f}",
-                        f"RM {float(sale['amount_paid']):.2f}", f"RM {float(sale['change_given']):.2f}",
+                        f"RM {float(sale['total']):.2f}",
+                        f"RM {float(sale['discount']):.2f}",
+                        f"RM {float(sale['amount_paid']):.2f}",
+                        f"RM {float(sale['change_given']):.2f}",
                         sale['payment_method'], sale['status']
                     ))
         except Exception as e:
@@ -606,6 +697,7 @@ def open_cashier_dashboard(user_id):
     btn_inventory.pack(side="left", padx=2)
 
     def tutup_shift():
+        global user_id, CASHIER_ID
         win = tk.Toplevel(dashboard)
         win.title("Tutup Shift")
         win.geometry("350x200")
@@ -617,7 +709,13 @@ def open_cashier_dashboard(user_id):
         def submit_tutup():
             try:
                 baki_akhir = float(entry_baki.get())
-                resp = requests.post(API_URL, json={"action": "close_shift", "user_id": user_id, "cash_end": baki_akhir}, timeout=10)
+                print(f"Menamatkan syif untuk user_id: {user_id}, cashier_id: {CASHIER_ID}, cash_end: {baki_akhir}")
+                resp = requests.post(API_URL, json={
+                    "action": "close_shift",
+                    "user_id": user_id,
+                    "cash_end": baki_akhir,
+                    "cashier_id": CASHIER_ID  # Tambah cashier_id
+                }, timeout=10)
                 data = resp.json()
                 if data.get("status") == "success":
                     messagebox.showinfo("Sukses", "Shift berjaya ditutup!", parent=win)
@@ -625,8 +723,10 @@ def open_cashier_dashboard(user_id):
                     dashboard.destroy()
                     show_login_window()
                 else:
+                    print(f"Ralat API semasa menutup syif: {data.get('message', 'Tiada mesej ralat')}")
                     raise Exception(data.get("message", "Gagal tutup shift!"))
             except Exception as e:
+                print(f"Ralat semasa menutup syif: {e}")
                 messagebox.showerror("Error", f"Gagal tutup shift: {e}", parent=win)
         tk.Button(win, text="Tutup Shift", command=submit_tutup, bg="#32CD32", fg="white", font=("Arial", 12, "bold")).pack(pady=10)
         tk.Button(win, text="Batal", command=win.destroy).pack()
@@ -654,13 +754,13 @@ def open_cashier_dashboard(user_id):
     button_grid.pack(pady=3, fill="x", padx=26)
     btn_detect = ctk.CTkButton(button_grid, text="Detect \n Printer", fg_color="#9444DD", text_color="white", font=("Arial", 17, "bold"), command=lambda: select_printer_popup(dashboard), width=120, height=50)
     btn_detect.grid(row=0, column=0, padx=5, pady=5, sticky="ew")
-    btn_virtual = ctk.CTkButton(button_grid, text="Virtual \n Keyboard", fg_color="#20B2AA", text_color="white", font=("Arial", 17, "bold"), command=lambda: CTkVirtualKeyboard(dashboard), width=120, height=50)
+    btn_virtual = ctk.CTkButton(button_grid, text="Virtual Keyboard \n [F3]", fg_color="#20B2AA", text_color="white", font=("Arial", 17, "bold"), command=lambda: CTkVirtualKeyboard(dashboard), width=120, height=50)
     btn_virtual.grid(row=0, column=1, padx=5, pady=5, sticky="ew")
-    btn_cari = ctk.CTkButton(button_grid, text="Cari \n Produk", fg_color="#FFD700", text_color="black", font=("Arial", 17, "bold"), command=lambda: open_search_product(), width=120, height=50)
+    btn_cari = ctk.CTkButton(button_grid, text="Cari Produk \n [F4]", fg_color="#FFD700", text_color="black", font=("Arial", 17, "bold"), command=lambda: open_search_product(), width=120, height=50)
     btn_cari.grid(row=1, column=0, padx=5, pady=5, sticky="ew")
     btn_hapus = ctk.CTkButton(button_grid, text="Hapus \n Produk", fg_color="#FF6347", text_color="white", font=("Arial", 17, "bold"), command=lambda: remove_item(), width=120, height=50)
     btn_hapus.grid(row=1, column=1, padx=5, pady=5, sticky="ew")
-    btn_laci = ctk.CTkButton(button_grid, text="Buka \n Laci", fg_color="#4169E1", text_color="white", font=("Arial", 17, "bold"), command=open_cash_drawer, width=120, height=50)
+    btn_laci = ctk.CTkButton(button_grid, text="Buka Laci \n [F6]", fg_color="#4169E1", text_color="white", font=("Arial", 17, "bold"), command=open_cash_drawer, width=120, height=50)
     btn_laci.grid(row=2, column=0, padx=5, pady=5, sticky="ew")
 
     def confirm_logout(dashboard, user_id):
@@ -686,12 +786,13 @@ def open_cashier_dashboard(user_id):
         confirm_win.transient(dashboard)
         confirm_win.grab_set()
         confirm_win.wait_window()
-    btn_keluar = ctk.CTkButton(button_grid, text="Keluar", fg_color="#B22222", text_color="white", font=("Arial", 17, "bold"), command=lambda: confirm_logout(dashboard, user_id), width=120, height=50)
+
+    btn_keluar = ctk.CTkButton(button_grid, text="Keluar \n [F10]", fg_color="#B22222", text_color="white", font=("Arial", 17, "bold"), command=lambda: confirm_logout(dashboard, user_id), width=120, height=50)
     btn_keluar.grid(row=2, column=1, padx=5, pady=5, sticky="ew")
     button_grid.columnconfigure(0, weight=1)
     button_grid.columnconfigure(1, weight=1)
 
-    ctk.CTkButton(right, text="Selesaikan Transaksi", font=("Arial", 19, "bold"), width=120, height=80, fg_color="#32CD32", command=lambda: complete_transaction()).pack(fill="x", padx=30, pady=30)
+    ctk.CTkButton(right, text="Selesaikan Transaksi \n [F2]", font=("Arial", 19, "bold"), width=120, height=80, fg_color="#32CD32", command=lambda: complete_transaction()).pack(fill="x", padx=30, pady=30)
 
     subtotal_frame = ctk.CTkFrame(right)
     subtotal_frame.pack(fill="x", padx=10, pady=2)
@@ -816,6 +917,7 @@ def open_cashier_dashboard(user_id):
         if items:
             last_item = items[-1]
             tree_main.selection_set(last_item)
+            tree_main.focus(last_item)
             tree_main.see(last_item)
 
     def scan_barcode(barcode):
@@ -824,18 +926,33 @@ def open_cashier_dashboard(user_id):
         try:
             res = requests.get(f"{API_URL}?barcode={barcode}")
             res.raise_for_status()
+            print(f"Raw response (product): {res.text}")
             product = res.json()
-            if not product or 'id' not in product:
+            if not product or 'data' not in product or 'id' not in product['data']:
                 messagebox.showwarning("Peringatan", "Produk tidak ditemukan!")
                 return
-            product_name = product['name']
-            price_float = float(product['price'])
-            is_weighable = int(product.get('is_weighable', 0))
+            product_data = product['data']
+            product_name = product_data['name']
+            price_float = float(product_data['price'])
+            barcode_type = product_data['barcode_type']
+            is_weighable = int(product_data.get('is_weighable', 0))
+
+            res_details = requests.get(f"{API_URL}?action=get_product_details&barcode={barcode}")
+            res_details.raise_for_status()
+            print(f"Raw response (details): {res_details.text}")
+            details = res_details.json()
+            if not details or 'data' not in details or 'unit_per_pack' not in details['data'] or 'pack_per_box' not in details['data']:
+                messagebox.showwarning("Peringatan", f"Gagal dapatkan butiran produk! Details: {details}")
+                return
+            details_data = details['data']
+            unit_per_pack = int(details_data.get('unit_per_pack', 1))
+            pack_per_box = int(details_data.get('pack_per_box', 1))
+
             if is_weighable:
                 win = tk.Toplevel()
                 win.title("Masukkan Berat (KG)")
                 win.geometry("320x120")
-                tk.Label(win, text=f"Masukkan berat (kg) untuk {product_name}:", font=("Arial", 13)).pack()
+                tk.Label(win, text=f"Masukkan berat (kg) untuk {product_name} ({barcode_type}):", font=("Arial", 13)).pack()
                 qty_entry = tk.Entry(win, font=("Arial", 15), width=10)
                 qty_entry.pack(pady=7)
                 qty_entry.focus()
@@ -857,21 +974,33 @@ def open_cashier_dashboard(user_id):
                 if not quantity:
                     return
             else:
-                quantity = 1
-                for item in tree_main.get_children():
-                    values = tree_main.item(item, 'values')
-                    if values[1] == product_name:
-                        old_qty = float(values[3])
-                        new_quantity = old_qty + 1
-                        new_total = new_quantity * price_float
-                        tree_main.item(item, values=(values[0], values[1], f"RM {price_float:.2f}", new_quantity, f"RM {new_total:.2f}"))
-                        update_totals()
-                        entry_barcode.delete(0, tk.END)
-                        highlight_last_cart_item()
-                        return
+                # Set quantity based on barcode type
+                if barcode_type == 'unit':
+                    quantity = 1
+                elif barcode_type == 'pack':
+                    quantity = 1  # One pack
+                elif barcode_type == 'box':
+                    quantity = 1  # One box
+
+            # Check if item with same product name and barcode type exists in cart
+            for item in tree_main.get_children():
+                values = tree_main.item(item, 'values')
+                if values[1] == product_name and values[5] == barcode_type:
+                    old_qty = float(values[3])
+                    new_quantity = int(old_qty + quantity) if not is_weighable else old_qty + quantity
+                    new_total = new_quantity * price_float
+                    qty_display = f"{new_quantity}" if not is_weighable else f"{new_quantity:.3f}"
+                    tree_main.item(item, values=(values[0], values[1], f"RM {price_float:.2f}", qty_display, f"RM {new_total:.2f}", barcode_type))
+                    update_totals()
+                    entry_barcode.delete(0, tk.END)
+                    highlight_last_cart_item()
+                    return
+
+            # Add new item to cart
             idx = item_counter[0]
             total = quantity * price_float
-            tree_main.insert("", "end", values=(idx, product_name, f"RM {price_float:.2f}", quantity, f"RM {total:.2f}"))
+            qty_display = f"{quantity}" if not is_weighable else f"{quantity:.3f}"
+            tree_main.insert("", "end", values=(idx, product_name, f"RM {price_float:.2f}", qty_display, f"RM {total:.2f}", barcode_type))
             item_counter[0] += 1
             update_totals()
             entry_barcode.delete(0, tk.END)
@@ -892,66 +1021,165 @@ def open_cashier_dashboard(user_id):
             item_counter[0] += 1
         update_totals()
 
+    def do_search(*args):
+        global win, results_tree, search_var, products_data
+        query = search_var.get().strip()
+        print(f"[do_search] Executing search with query: {query}")
+        if len(query) < 2:
+            results_tree.delete(*results_tree.get_children())
+            return
+
+        try:
+            params = {'action': 'search_products', 'query': query, 'limit': 15}
+            response = requests.get(API_URL, params=params, timeout=10)
+            print(f"[do_search] API response: {response.text}")
+            data = response.json()
+            if not isinstance(data, dict) or 'data' not in data:
+                raise ValueError("Format response tidak valid")
+
+            # Force ambil data fresh setiap kali
+            products_data.clear()
+            products = data['data']
+            products_data.extend(products)
+
+            results_tree.delete(*results_tree.get_children())
+            results_tree.tag_configure("low_stock", background="#FFCCCC")
+            results_tree.tag_configure("pack_item", background="#CCE5FF")
+            results_tree.tag_configure("box_item", background="#CCFFCC")
+            results_tree.tag_configure("weighable_item", background="#FFFFCC")
+
+            for product in products:
+                price = float(product.get('price', 0))
+                stock = int(product.get('stock', 0))
+                name = product.get("name", "")
+                barcode = product.get("barcode", "")
+                barcode_type = product.get("barcode_type", "unit")
+                is_weighable = int(product.get("is_weighable", 0))
+
+                item_id = results_tree.insert("", "end", values=(
+                    name,
+                    f"RM {price:.2f}",
+                    stock,
+                    barcode
+                ))
+
+                tags = []
+                if barcode_type == "pack":
+                    tags.append("pack_item")
+                elif barcode_type == "box":
+                    tags.append("box_item")
+                if is_weighable:
+                    tags.append("weighable_item")
+                if stock < 5:
+                    tags = ["low_stock"]
+
+                results_tree.item(item_id, tags=tuple(tags))
+                print(f"[do_search] Inserted product: {product}")
+
+        except Exception as e:
+            print(f"[do_search] Search error: {e}")
+            messagebox.showerror("Error", f"Gagal memuat hasil carian: {e}", parent=win)
+
+
     def open_search_product():
-        global search_popup_open
+        global win, results_tree, search_var, products_data, search_popup_open, tree_main, item_counter, entry_barcode
+
         if search_popup_open:
             return
         search_popup_open = True
-        win = tk.Toplevel(dashboard)
-        win.title("Cari Produk")
-        win.geometry("700x500")
-        tk.Label(win, text="Cari:").pack(anchor="w")
-        search_var = tk.StringVar()
-        search_entry = tk.Entry(win, textvariable=search_var, font=("Arial", 14), width=30)
-        search_entry.pack(anchor="w", padx=10)
-        search_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(search_entry))
-        results_tree = ttk.Treeview(win, columns=("Nama", "Harga", "Stok", "Barcode"), show="headings", height=12)
-        for col in results_tree["columns"]:
-            results_tree.heading(col, text=col)
-            results_tree.column(col, width=150)
-        results_tree.pack(fill="both", expand=True, padx=10, pady=10)
         products_data = []
-        def do_search(*args):
-            query = search_var.get().strip()
-            if len(query) < 2:
-                results_tree.delete(*results_tree.get_children())
-                return
-            try:
-                params = {'action': 'search_products', 'query': query, 'limit': 50}
-                response = requests.get(API_URL, params=params, timeout=10)
-                data = response.json()
-                if not isinstance(data, dict) or 'data' not in data:
-                    raise ValueError("Format response tidak valid")
-                products = data['data']
-                products_data.clear()
-                products_data.extend(products)
-                results_tree.delete(*results_tree.get_children())
-                for product in products:
-                    results_tree.insert("", "end", values=(
-                        product.get("name", ""), f"RM {float(product.get('price', 0)):.2f}",
-                        product.get("stock", ""), product.get("barcode", "")
-                    ))
-            except Exception as e:
-                messagebox.showerror("Error", str(e), parent=win)
+
+        win = tk.Toplevel()
+        win.title("Cari Produk")
+        win.geometry("800x400")
+
+        win.transient()
+        win.grab_set()
+        win.focus_force()
+        win.attributes("-topmost", True)
+
         def close_popup():
             global search_popup_open
             search_popup_open = False
             win.destroy()
             entry_barcode.focus_set()
-        def add_selected_product():
-            selected = results_tree.focus()
-            if not selected:
-                messagebox.showwarning("Peringatan", "Pilih produk.", parent=win)
+
+        win.protocol("WM_DELETE_WINDOW", close_popup)
+        win.bind("<Escape>", lambda e: close_popup())
+
+        search_var = tk.StringVar()
+        search_var.trace("w", do_search)
+        search_entry = tk.Entry(win, textvariable=search_var, font=("Arial", 15))
+        search_entry.pack(fill="x", padx=10, pady=10)
+        search_entry.focus()
+
+        cols = ("Nama", "Harga", "Stok", "Barcode")
+        results_tree = ttk.Treeview(win, columns=cols, show="headings")
+        for col in cols:
+            results_tree.heading(col, text=col)
+            results_tree.column(col, width=200 if col == "Nama" else 100)
+        results_tree.pack(fill="both", expand=True, padx=10, pady=10)
+
+        def on_single_click(event):
+            item = results_tree.identify_row(event.y)
+            if item:
+                results_tree.selection_set(item)
+                results_tree.focus(item)
+
+        def on_tree_select(event=None):
+            item = results_tree.focus()
+            if not item:
                 return
-            vals = results_tree.item(selected, "values")
+            selected = results_tree.item(item, "values")
+            if selected:
+                add_selected_product()
+
+        search_entry.bind("<Return>", on_tree_select)
+        results_tree.bind("<Button-1>", on_single_click)
+        results_tree.bind("<Double-1>", on_tree_select)
+
+        do_search()
+
+        items = results_tree.get_children()
+        if items:
+            results_tree.selection_set(items[0])
+            results_tree.focus(items[0])
+    def add_selected_product():
+        global tree_main, item_counter, products_data, win, search_popup_open
+        if not results_tree.focus():
+            messagebox.showwarning("Peringatan", "Pilih produk terlebih dahulu!", parent=win)
+            return
+        try:
+            vals = results_tree.item(results_tree.focus(), "values")
+            print(f"Selected values: {vals}")
             product_name = vals[0]
             price_str = vals[1].replace("RM", "").strip()
             price = float(price_str)
+            barcode = vals[3]
+            barcode_type = None
             is_weighable = 0
             for product in products_data:
                 if product.get('name') == product_name:
                     is_weighable = int(product.get('is_weighable', 0))
+                    barcode_type = product.get('barcode_type', 'unit')
                     break
+            if not barcode_type:
+                messagebox.showerror("Error", "Jenis barcode tidak ditemui untuk produk ini.", parent=win)
+                return
+            print(f"Adding product: {product_name}, Barcode: {barcode}, Type: {barcode_type}, Weighable: {is_weighable}")
+            
+            # Dapatkan butiran item_id, unit_per_pack, dan pack_per_box
+            res_details = requests.get(f"{API_URL}?action=get_product_details&barcode={barcode}", timeout=5)
+            res_details.raise_for_status()
+            details = res_details.json()
+            if not details or 'data' not in details or 'id' not in details['data']:
+                messagebox.showwarning("Peringatan", f"Gagal dapatkan butiran produk! Details: {details}")
+                return
+            details_data = details['data']
+            item_id = int(details_data.get('id'))
+            unit_per_pack = int(details_data.get('unit_per_pack', 1))
+            pack_per_box = int(details_data.get('pack_per_box', 1))
+
             if is_weighable:
                 berat_win = tk.Toplevel(win)
                 berat_win.title("Masukkan Berat (KG)")
@@ -960,6 +1188,7 @@ def open_cashier_dashboard(user_id):
                 qty_entry = tk.Entry(berat_win, font=("Arial", 15), width=10)
                 qty_entry.pack(pady=7)
                 qty_entry.focus()
+                qty_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(qty_entry))
                 result = {'quantity': None}
                 def submit_qty():
                     try:
@@ -971,116 +1200,142 @@ def open_cashier_dashboard(user_id):
                     except:
                         messagebox.showerror("Input Salah", "Sila masukkan berat dalam KG (cth: 0.185)", parent=berat_win)
                 tk.Button(berat_win, text="OK", command=submit_qty, width=10).pack()
-                berat_win.transient()
+                berat_win.transient(win)
                 berat_win.grab_set()
                 berat_win.wait_window()
                 quantity = result['quantity']
                 if not quantity:
+                    print("No quantity entered, cancelling")
                     return
             else:
-                quantity = 1
-                for item in tree_main.get_children():
-                    v = tree_main.item(item, 'values')
-                    if v[1] == product_name:
-                        old_qty = float(v[3])
-                        new_quantity = old_qty + 1
-                        new_total = new_quantity * price
-                        tree_main.item(item, values=(v[0], v[1], f"RM {price:.2f}", new_quantity, f"RM {new_total:.2f}"))
-                        update_totals()
-                        win.destroy()
-                        highlight_last_cart_item()
-                        return
+                # Tetapkan kuantiti berdasarkan jenis barcode
+                if barcode_type == 'unit':
+                    quantity = 1
+                elif barcode_type == 'pack':
+                    quantity = unit_per_pack  # Kuantiti dalam unit asas
+                elif barcode_type == 'box':
+                    quantity = unit_per_pack * pack_per_box  # Kuantiti dalam unit asas
+
+            # Semak jika produk sudah ada dalam troli
+            for item in tree_main.get_children():
+                v = tree_main.item(item, 'values')
+                if v[1] == product_name and v[5] == barcode_type:
+                    old_qty = float(v[3])
+                    new_quantity = int(old_qty + 1) if not is_weighable else old_qty + quantity
+                    new_total = new_quantity * price
+                    qty_display = f"{new_quantity}" if not is_weighable else f"{new_quantity:.3f}"
+                    tree_main.item(item, values=(v[0], v[1], f"RM {price:.2f}", qty_display, f"RM {new_total:.2f}", barcode_type, v[6], v[7], v[8]))
+                    print(f"Updated existing item: {product_name}, New Quantity: {new_quantity}, Total: {new_total}")
+                    update_totals()
+                    win.destroy()
+                    highlight_last_cart_item()
+                    search_popup_open = False
+                    return
+            # Tambah item baru ke troli
             idx = item_counter[0]
-            total = price * quantity
-            tree_main.insert("", "end", values=(idx, product_name, f"RM {price:.2f}", quantity, f"RM {total:.2f}"))
+            total = price * (1 if is_weighable or barcode_type == 'unit' else (unit_per_pack if barcode_type == 'pack' else unit_per_pack * pack_per_box))
+            qty_display = f"1" if not is_weighable else f"{quantity:.3f}"
+            tree_main.insert("", "end", values=(idx, product_name, f"RM {price:.2f}", qty_display, f"RM {total:.2f}", barcode_type, item_id, unit_per_pack, pack_per_box))
+            print(f"Inserted new item: {product_name}, Quantity: {qty_display}, Total: {total}, Barcode Type: {barcode_type}, Item ID: {item_id}")
             item_counter[0] += 1
             update_totals()
             win.destroy()
             highlight_last_cart_item()
-            close_popup()
-        search_var.trace_add("write", do_search)
-        search_entry.bind("<Return>", do_search)
-        results_tree.bind("<Double-1>", lambda e: add_selected_product())
-        win.protocol("WM_DELETE_WINDOW", close_popup)
+            search_popup_open = False
+        except Exception as e:
+            print(f"Error in add_selected_product: {str(e)}")
+            messagebox.showerror("Error", f"Gagal menambah produk ke troli: {str(e)}", parent=win)
 
-        # Di dalam open_cashier_dashboard, pastikan bahagian berikut ada dan betul:
-        def tree_main_double_click(event):
-            sel = tree_main.focus()
-            if not sel:
-                return
-            item_id = tree_main.item(sel, 'values')[0]
-            update_quantity_modal(item_id, tree_main)
+    def tree_main_double_click(event):
+        sel = tree_main.focus()
+        if not sel:
+            return
+        item_id = tree_main.item(sel, 'values')[0]
+        update_quantity_modal(item_id, tree_main)
 
-        tree_main.bind("<Double-1>", tree_main_double_click)
+    tree_main.bind("<Double-1>", tree_main_double_click)
 
-        # Fungsi update_quantity_modal (gantikan yang sedia ada)
-        def update_quantity_modal(item_id, tree):
-            selected_item = None
-            for item in tree.get_children():
-                if tree.item(item, 'values')[0] == item_id:
-                    selected_item = item
-                    break
-            if not selected_item:
-                messagebox.showwarning("Peringatan", "Item tidak ditemui!")
-                return
-            current_values = tree.item(selected_item, 'values')
-            product_name = current_values[1]
-            current_quantity = current_values[3]
-            current_price = float(current_values[2].replace("RM", "").strip())
+    def update_quantity_modal(item_id, tree):
+        global update_qty_popup_open
+        if update_qty_popup_open:
+            return
+        update_qty_popup_open = True
+        selected_item = None
+        for item in tree.get_children():
+            if tree.item(item, 'values')[0] == item_id:
+                selected_item = item
+                break
+        if not selected_item:
+            messagebox.showwarning("Peringatan", "Item tidak ditemui!")
+            update_qty_popup_open = False
+            return
+        current_values = tree.item(selected_item, 'values')
+        product_name = current_values[1]
+        current_quantity = current_values[3]
+        current_price = float(current_values[2].replace("RM", "").strip())
+        try:
+            is_weighable = (float(current_quantity) != int(float(current_quantity)))
+        except Exception:
+            is_weighable = False
+        modal = tk.Toplevel(tree.master)
+        modal.title(f"Kemaskini Kuantiti & Harga: {product_name}")
+        modal.geometry("320x420")
+        tk.Label(modal, text=f"Produk: {product_name}", font=("Arial", 13, "bold")).pack(pady=10)
+        tk.Label(modal, text="Kuantiti Baru:", font=("Arial", 13)).pack(pady=5)
+        quantity_entry = tk.Entry(modal, font=("Arial", 14), width=10)
+        quantity_entry.insert(0, str(current_quantity))
+        quantity_entry.pack(pady=5)
+        quantity_entry.focus()
+        tk.Label(modal, text="Harga Baru (RM):", font=("Arial", 13)).pack(pady=5)
+        price_entry = tk.Entry(modal, font=("Arial", 14), width=10)
+        price_entry.insert(0, f"{current_price:.2f}")
+        price_entry.pack(pady=5)
+        price_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(price_entry))
+
+        def submit_quantity():
             try:
-                is_weighable = (float(current_quantity) != int(float(current_quantity)))
-            except Exception:
-                is_weighable = False
-            modal = tk.Toplevel(tree.master)
-            modal.title(f"Kemaskini Kuantiti & Harga: {product_name}")
-            modal.geometry("320x420")
-            tk.Label(modal, text=f"Produk: {product_name}", font=("Arial", 13, "bold")).pack(pady=10)
-            tk.Label(modal, text="Kuantiti Baru:", font=("Arial", 13)).pack(pady=5)
-            quantity_entry = tk.Entry(modal, font=("Arial", 14), width=10)
-            quantity_entry.insert(0, str(current_quantity))
-            quantity_entry.pack(pady=5)
-            quantity_entry.focus()
-            tk.Label(modal, text="Harga Baru (RM):", font=("Arial", 13)).pack(pady=5)
-            price_entry = tk.Entry(modal, font=("Arial", 14), width=10)
-            price_entry.insert(0, f"{current_price:.2f}")
-            price_entry.pack(pady=5)
-            price_entry.bind("<FocusIn>", lambda e: CTkVirtualKeyboard.set_target_entry(price_entry))
+                val_quantity = quantity_entry.get().strip()
+                if is_weighable:
+                    new_quantity = float(val_quantity)
+                    if new_quantity < 0.001:
+                        raise ValueError("Kuantiti mestilah lebih besar daripada 0")
+                else:
+                    if '.' in val_quantity:
+                        raise ValueError("Kuantiti untuk barang unit mesti nombor bulat")
+                    new_quantity = int(val_quantity)
+                    if new_quantity < 1:
+                        raise ValueError("Kuantiti mestilah lebih besar daripada 0")
+                val_price = price_entry.get().strip()
+                new_price = float(val_price)
+                if new_price <= 0:
+                    raise ValueError("Harga mesti lebih besar daripada 0")
+                new_total = new_price * new_quantity
+                qty_display = f"{new_quantity}" if not is_weighable else f"{new_quantity:.3f}"
+                tree.item(selected_item, values=(
+                    current_values[0], current_values[1],
+                    f"RM {new_price:.2f}", qty_display,
+                    f"RM {new_total:.2f}"
+                ))
+                update_totals()
+                modal.destroy()
+                global update_qty_popup_open
+                update_qty_popup_open = False
+                tree.selection_set(selected_item)
+                tree.focus(selected_item)
+            except ValueError as e:
+                messagebox.showerror("Input Tidak Sah", str(e), parent=modal)
+                quantity_entry.focus()
+            except Exception as e:
+                messagebox.showerror("Error", f"Ralat: {str(e)}", parent=modal)
+                quantity_entry.focus()
 
-            def submit_quantity():
-                try:
-                    val_quantity = quantity_entry.get().strip()
-                    if is_weighable:
-                        new_quantity = float(val_quantity)
-                        if new_quantity < 0.001:
-                            raise ValueError("Kuantiti mestilah > 0")
-                    else:
-                        if '.' in val_quantity:
-                            raise ValueError("Kuantiti untuk barang unit mesti nombor bulat")
-                        new_quantity = int(val_quantity)
-                        if new_quantity < 1:
-                            raise ValueError("Kuantiti mestilah > 0")
-                    
-                    val_price = price_entry.get().strip()
-                    new_price = float(val_price)
-                    if new_price <= 0:
-                        raise ValueError("Harga mesti lebih dari 0")
-
-                    new_total = new_price * new_quantity
-                    tree.item(selected_item, values=(
-                        current_values[0], current_values[1], f"RM {new_price:.2f}", new_quantity, f"RM {new_total:.2f}"
-                    ))
-                    update_totals()
-                    modal.destroy()
-                except ValueError as e:
-                    messagebox.showerror("Input Tidak Sah", str(e), parent=modal)
-                    quantity_entry.focus()
-                except Exception as e:
-                    messagebox.showerror("Error", f"Ralat: {str(e)}", parent=modal)
-                    quantity_entry.focus()
-
-            tk.Button(modal, text="Simpan", command=submit_quantity, width=12, bg="#32CD32", fg="white").pack(pady=10)
-            tk.Button(modal, text="Batal", command=modal.destroy, width=12).pack()
-            modal.bind('<Return>', lambda e: submit_quantity())
+        tk.Button(modal, text="Simpan", command=submit_quantity, width=12, bg="#32CD32", fg="white").pack(pady=10)
+        tk.Button(modal, text="Batal", command=lambda: [modal.destroy(), globals().update(update_qty_popup_open=False)], width=12).pack()
+        modal.bind('<Return>', lambda e: submit_quantity())
+        modal.protocol("WM_DELETE_WINDOW", lambda: [modal.destroy(), globals().update(update_qty_popup_open=False)])
+        modal.transient(dashboard)
+        modal.grab_set()
+        modal.wait_window()
 
     def load_low_stock_products():
         tree_low_stock.delete(*tree_low_stock.get_children())
@@ -1102,10 +1357,29 @@ def open_cashier_dashboard(user_id):
             for item in tree_main.get_children():
                 values = tree_main.item(item, 'values')
                 product_name = values[1]
-                qty = float(values[3])
+                qty_display = values[3]
                 price = float(values[2].replace("RM", ""))
                 total = float(values[4].replace("RM", ""))
-                items.append({'name': product_name, 'quantity': qty, 'price': price, 'total': total})
+                barcode_type = values[5]
+                item_id = int(values[6])  # Ambil item_id
+                unit_per_pack = int(values[7])  # Ambil unit_per_pack
+                pack_per_box = int(values[8])   # Ambil pack_per_box
+                
+                # Selaraskan kuantiti berdasarkan jenis barcode
+                qty = float(qty_display)
+                if barcode_type == 'pack':
+                    qty *= unit_per_pack
+                elif barcode_type == 'box':
+                    qty *= unit_per_pack * pack_per_box
+                    
+                items.append({
+                    'name': product_name,
+                    'quantity': qty,
+                    'price': price,
+                    'total': total,
+                    'item_id': item_id,  # Hantar item_id ke API
+                    'barcode_type': barcode_type
+                })
             if not items:
                 messagebox.showwarning("Peringatan", "Tidak ada item dalam troli!")
                 return
@@ -1126,29 +1400,31 @@ def open_cashier_dashboard(user_id):
                 if amount_paid < total:
                     messagebox.showwarning("Peringatan", "Jumlah bayar kurang dari total")
                     return
+            sale_id = str(uuid.uuid4())
             transaction_data = {
                 "action": "save_transaction",
+                "sale_id": sale_id,
                 "items": items,
                 "total": total,
                 "discount": discount,
                 "tax": tax,
                 "amount_paid": amount_paid,
                 "user_id": user_id,
+                "cashier_id": CASHIER_ID,
                 "payment_method": payment_method,
                 "payment_method_id": payment_method_id,
                 "customer_info": customer_data if payment_method == "Hutang" else None
             }
             response = requests.post(API_URL, json=transaction_data, timeout=10)
+            response.raise_for_status()
             result = response.json()
             if result.get("status") != "success":
                 messagebox.showerror("Error", result.get("message", "Gagal simpan transaksi"))
                 return
-
             if print_receipt_var.get():
                 print_receipt(items, total, amount_paid, payment_method)
             if open_drawer_var.get():
                 open_cash_drawer()
-
             messagebox.showinfo("Sukses", "Transaksi berjaya!")
             for item in tree_main.get_children():
                 tree_main.delete(item)
@@ -1162,8 +1438,8 @@ def open_cashier_dashboard(user_id):
             load_today_sales()
         except Exception as e:
             messagebox.showerror("Error", f"Gagal proses transaksi: {str(e)}")
-
-    dashboard.bind('<F3>', lambda e: CTkVirtualKeyboard(dashboard))
+            print(f"Error in complete_transaction: {str(e)}")
+        
     dashboard.after(700, lambda: CTkVirtualKeyboard(dashboard))
     entry_barcode.bind("<Return>", lambda e: scan_barcode(entry_barcode.get()))
     entry_discount.bind("<KeyRelease>", update_totals)
@@ -1175,7 +1451,10 @@ def open_cashier_dashboard(user_id):
         allowed_entries = {entry_barcode, entry_discount, entry_tax, entry_amount_paid}
         if not search_popup_open and not update_qty_popup_open and (focus_widget not in allowed_entries):
             try:
-                entry_barcode.focus_set()
+                if tree_main.get_children():
+                    tree_main.focus_set()
+                else:
+                    entry_barcode.focus_set()
             except Exception:
                 pass
         dashboard.after(20000, keep_focus_barcode)
@@ -1183,7 +1462,11 @@ def open_cashier_dashboard(user_id):
 
     dashboard.bind('<F1>', lambda e: entry_amount_paid.focus_set())
     dashboard.bind('<F2>', lambda e: complete_transaction())
-    dashboard.bind('<F5>', lambda e: update_quantity_modal())
+    dashboard.bind('<F3>', lambda e: CTkVirtualKeyboard(dashboard))
+    dashboard.bind('<F4>', lambda e: open_search_product())
+    dashboard.bind('<F5>', lambda e: update_quantity_modal(tree_main.item(tree_main.focus(), 'values')[0], tree_main) if tree_main.focus() else messagebox.showwarning("Peringatan", "Pilih item terlebih dahulu!"))
+    dashboard.bind('<F6>', lambda e: open_cash_drawer())
+    dashboard.bind('<F10>', lambda e: confirm_logout(dashboard, user_id))
 
     def select_printer_popup(master):
         global SELECTED_PRINTER_PORT
