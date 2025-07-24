@@ -1628,3 +1628,41 @@ def open_cashier_dashboard(user_id, cashier_id):
 
 if __name__ == "__main__":
     show_login_window()
+
+
+receipt_lines = [
+    "\x1B\x40",        # Initialize printer
+    "\x1B\x21\x20",    # Font style
+    "\x1B\x61\x01",    # Centered
+
+    # --- LOGO TEKS DMMT ---
+    "  ____  __  __ __  __ _______ ",
+    " |  _ \\|  \\/  |  \\/  |__   __|",
+    " | | | | \\  / | \\  / |  | |   ",
+    " | |_| | |\\/| | |\\/| |  | |   ",
+    " |____/|_|  |_|_|  |_|  |_|   ",
+    "                              ",
+    "         D M M T             ",
+    "=" * LEBAR,
+    "\x1B\x61\x00",    # Kembali kiri
+
+    # --- Seterusnya isi resit biasa akan disambung di sini ---
+    f"{'Diskaun:':<16}{discount:>16.2f}",
+    f"{'Cukai:':<16}{tax:>16.2f}",
+    f"{'Dibayar:':<16}{amount_paid:>16.2f}",
+    f"{'Baki:':<16}{change:>16.2f}",
+    f"{'Total:':<16}{grand_total:>16.2f}",
+    "=" * LEBAR,
+    f"Bayar: {payment_method}",
+    "=" * LEBAR,
+    "\x1B\x61\x01",
+    "Terima kasih! Barang tidak boleh ditukar",
+    "\x1B\x61\x00",
+    "=" * LEBAR,
+    "\x1B\x61\x01",
+    f"\x1D\x68\x50\x1D\x77\x02\x1D\x6B\x49{chr(len(receipt_no))}{receipt_no}",
+    "\x1B\x61\x00",
+    "\n\n",
+    "\x1D\x56\x41\x03",  # Potong kertas
+    "\x1B\x70\x00\x19\xFA"  # Buka cash drawer
+]
