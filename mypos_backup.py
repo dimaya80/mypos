@@ -52,7 +52,7 @@ try:
     CASHIER_ID = config['CASHIER_ID']
     API_URL = config['API_URL']
     SYNC_PUSH_URL = f"{config['SYNC_PUSH_URL']}?cashier_id={CASHIER_ID}"
-    SYNC_PULL_URL = f"{config['SYNC_PULL_URL']}?cashier_id={CASHIER_ID}"  # Tambah cashier_id
+    SYNC_PULL_URL = f"{config['SYNC_PULL_URL']}"  # Tambah cashier_id
 except Exception as e:
     raise SystemExit(f"Ralat konfigurasi: {str(e)}")
 
@@ -1184,20 +1184,16 @@ def open_cashier_dashboard(user_id, cashier_id):
         print(f"[do_search] Executing search with query: {query}")
         if len(query) < 2:
             results_tree.delete(*results_tree.get_children())
-            print("[do_search] Query too short, clearing results")
             return
         try:
             params = {'action': 'search_products', 'query': query, 'limit': 15}
             response = requests.get(API_URL, params=params, timeout=10)
-            print(f"[do_search] API URL: {response.url}")
-            print(f"[do_search] API response status: {response.status_code}")
             print(f"[do_search] API response: {response.text}")
             data = response.json()
             if not isinstance(data, dict) or 'data' not in data:
                 raise ValueError("Format response tidak valid")
 
             products = data['data']
-            print(f"[do_search] Products found: {len(products)}")
             products_data.clear()
             products_data.extend(products)
             results_tree.delete(*results_tree.get_children())
@@ -1235,7 +1231,7 @@ def open_cashier_dashboard(user_id, cashier_id):
                 print(f"[do_search] Inserted product: {product}")
         except Exception as e:
             print(f"[do_search] Search error: {e}")
-            messagebox.showerror("Error", f"Gagal memuat hasil carian: {e}\nResponse: {response.text[:100]}", parent=win)
+            messagebox.showerror("Error", f"Gagal memuat hasil carian: {e}", parent=win)
 
     def open_search_product():
         global win, results_tree, search_var, products_data, search_popup_open, tree_main, item_counter, entry_barcode
@@ -1332,7 +1328,7 @@ def open_cashier_dashboard(user_id, cashier_id):
                 messagebox.showwarning("Peringatan", f"Gagal dapatkan butiran produk! Details: {details}")
                 return
             details_data = details['data']
-            item_id = details_data.get('id')
+            item_id = int(details_data.get('id'))
             unit_per_pack = int(details_data.get('unit_per_pack', 1))
             pack_per_box = int(details_data.get('pack_per_box', 1))
 
@@ -1628,41 +1624,3 @@ def open_cashier_dashboard(user_id, cashier_id):
 
 if __name__ == "__main__":
     show_login_window()
-
-
-receipt_lines = [
-    "\x1B\x40",        # Initialize printer
-    "\x1B\x21\x20",    # Font style
-    "\x1B\x61\x01",    # Centered
-
-    # --- LOGO TEKS DMMT ---
-    "  ____  __  __ __  __ _______ ",
-    " |  _ \\|  \\/  |  \\/  |__   __|",
-    " | | | | \\  / | \\  / |  | |   ",
-    " | |_| | |\\/| | |\\/| |  | |   ",
-    " |____/|_|  |_|_|  |_|  |_|   ",
-    "                              ",
-    "         D M M T             ",
-    "=" * LEBAR,
-    "\x1B\x61\x00",    # Kembali kiri
-
-    # --- Seterusnya isi resit biasa akan disambung di sini ---
-    f"{'Diskaun:':<16}{discount:>16.2f}",
-    f"{'Cukai:':<16}{tax:>16.2f}",
-    f"{'Dibayar:':<16}{amount_paid:>16.2f}",
-    f"{'Baki:':<16}{change:>16.2f}",
-    f"{'Total:':<16}{grand_total:>16.2f}",
-    "=" * LEBAR,
-    f"Bayar: {payment_method}",
-    "=" * LEBAR,
-    "\x1B\x61\x01",
-    "Terima kasih! Barang tidak boleh ditukar",
-    "\x1B\x61\x00",
-    "=" * LEBAR,
-    "\x1B\x61\x01",
-    f"\x1D\x68\x50\x1D\x77\x02\x1D\x6B\x49{chr(len(receipt_no))}{receipt_no}",
-    "\x1B\x61\x00",
-    "\n\n",
-    "\x1D\x56\x41\x03",  # Potong kertas
-    "\x1B\x70\x00\x19\xFA"  # Buka cash drawer
-]
